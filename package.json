@@ -1,0 +1,40 @@
+{
+  "name": "leave_backend",
+  "version": "1.0.0",
+  "description": "Backend for leave application",
+  "license": "ISC",
+  "author": "",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "build": "tsc && tsc-alias",
+    "start": "node dist/server.js",
+    "test": "echo \"No tests defined\" && exit 0"
+  },
+  "dependencies": {
+    "@apollo/server": "^5.0.0",
+    "apollo-server": "^3.13.0",
+    "axios": "^1.11.0",
+    "bcryptjs": "^3.0.2",
+    "config": "^4.1.1",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "generic-pool": "^3.9.0",
+    "graphql": "^16.11.0",
+    "graphql-tag": "^2.12.6",
+    "handlebars": "^4.7.8",
+    "jsonwebtoken": "^9.0.2",
+    "jwt-decode": "^4.0.0",
+    "mongoose": "^8.18.0",
+    "puppeteer": "^24.18.0",
+    "uuid-parse": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.10",
+    "ts-node": "^10.9.1",
+    "ts-node-dev": "^2.0.0",
+    "tsc-alias": "^1.8.16",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.9.2"
+  }
+}
