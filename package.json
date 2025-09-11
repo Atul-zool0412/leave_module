@@ -22,6 +22,7 @@
     "generic-pool": "^3.9.0",
     "graphql": "^16.11.0",
     "graphql-tag": "^2.12.6",
+    "graphql-type-json": "^0.3.2",
     "handlebars": "^4.7.8",
     "jsonwebtoken": "^9.0.2",
     "jwt-decode": "^4.0.0",
