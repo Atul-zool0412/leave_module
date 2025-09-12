@@ -1,7 +1,7 @@
 import { gql } from 'apollo-server';
 
 export const typeDefs = gql`
-    scalar JSON  
+    scalar JSON
 
     type Validity {
         StartDate: String
@@ -10,13 +10,13 @@ export const typeDefs = gql`
 
     type EmployeeLeaveType {
         leaveTypeId: ID
-        leaveTypeName: JSON   
+        leaveTypeName: JSON
         payType: Int
         unitOfLeave: Int
         entitlementType: Int
         validity: Validity
         isActive: Boolean
-        currentBalance: Float   # Added to match resolver
+        currentBalance: Float
     }
 
     type LeaveBalance {
@@ -33,8 +33,9 @@ export const typeDefs = gql`
     type LeaveApplication {
         applicationId: ID!
         status: String
-        type: String
-        appliedDate: String
+        leaveTypeName: JSON
+        appliedOn: String
+        approvedOn: String
     }
 
     type Query {
@@ -49,6 +50,22 @@ export const typeDefs = gql`
 
         getPendingApplications(companyId: ID!, userId: ID!): [LeaveApplication]
 
-        getApplicationHistory(companyId: ID!, employeeId: ID!): [LeaveApplication]
+        getApplicationHistory(
+            tenantIdBase64: String!
+            companyIdBase64: String!
+            filter: String
+            leaveTypeIdBase64: String
+            employeeLeaveTypeIdBase64: String
+            employeeIdBase64: String
+            unitOfLeave: Int
+            payType: Int
+            approvalStatus: String
+            employeePlaceholderIdsBase64: [String]
+            startDate: String
+            endDate: String
+            applicationDate: String
+            skipCount: Int
+            maxResultCount: Int
+        ): [LeaveApplication]
     }
 `;
