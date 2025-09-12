@@ -57,9 +57,15 @@ export const typeDefs = gql`
             leaveTypeIdBase64: String
         ): LeaveBalance
 
-        getPendingTasks(companyId: ID!, userId: ID!): [Task]
+        getPendingTasks(
+            companyId: ID!
+            userId: ID!
+        ): [Task]
 
-        getPendingApplications(companyId: ID!, userId: ID!): [LeaveApplication]
+        getPendingApplications(
+            companyId: ID!
+            userId: ID!
+        ): [LeaveApplication]
 
         getApplicationHistory(
             tenantIdBase64: String!

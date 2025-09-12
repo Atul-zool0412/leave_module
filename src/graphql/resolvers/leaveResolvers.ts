@@ -4,7 +4,9 @@ import GraphQLJSON from "graphql-type-json";
 
 export const resolvers = {
   JSON: GraphQLJSON,
+
   Query: {
+    // Get Leave Balance
     getLeaveBalance: async (
       _parent: any,
       args: {
@@ -16,19 +18,12 @@ export const resolvers = {
     ) => {
       const db = getDb();
 
-      // Aggregate EmployeeLeaveMap
       const aggregationPipeline = [
         {
           $match: {
             TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-            CompanyId: new Binary(
-              Buffer.from(args.companyIdBase64, "base64"),
-              3
-            ),
-            EmployeeId: new Binary(
-              Buffer.from(args.employeeIdBase64, "base64"),
-              3
-            ),
+            CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+            EmployeeId: new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
           },
         },
         {
@@ -45,10 +40,7 @@ export const resolvers = {
                     cond: {
                       $eq: [
                         "$$elt.LeaveTypeId",
-                        new Binary(
-                          Buffer.from(args.leaveTypeIdBase64!, "base64"),
-                          3
-                        ),
+                        new Binary(Buffer.from(args.leaveTypeIdBase64!, "base64"), 3),
                       ],
                     },
                   },
@@ -58,22 +50,20 @@ export const resolvers = {
           },
         },
       ];
-      // console.log('Aggregation Pipeline:', JSON.stringify(aggregationPipeline, null, 2));
+
       const result = await db
         .collection("EmployeeLeaveMapCollection")
         .aggregate(aggregationPipeline)
         .toArray();
-      // console.log('Leave Balance Result:', result[0].EmployeeLeaveTypes);
+
       if (result.length === 0) return null;
 
       const leaveMap = result[0];
 
-      // Get all LeaveTypeIds for parallel query
       const leaveTypeIds = leaveMap.EmployeeLeaveTypes.map(
         (lt: any) => lt.LeaveTypeId
       );
 
-      //   Fetch Leave Balances from EmployeeLeaveLedger
       const leaveBalances = await db
         .collection("EmployeeLeaveLedger")
         .find({
@@ -81,13 +71,13 @@ export const resolvers = {
         })
         .toArray();
 
-      // Merge balances into EmployeeLeaveTypes
       const employeeLeaveTypesWithBalance = leaveMap.EmployeeLeaveTypes.map(
         (elt: any) => {
           const balanceEntry = leaveBalances.find(
             (lb: any) =>
               lb.EmployeeLeaveTypeId.toString() === elt.LeaveTypeId.toString()
           );
+
           return {
             leaveTypeId: elt.LeaveTypeId.buffer.toString("base64"),
             leaveTypeName: elt.LeaveTypeName,
@@ -96,7 +86,7 @@ export const resolvers = {
             entitlementType: elt.LeaveEntitlementType,
             validity: elt.Validity,
             isActive: elt.IsActive,
-            currentBalance: balanceEntry ? balanceEntry.Balance : 0, // Add balance
+            currentBalance: balanceEntry ? balanceEntry.Balance : 0,
           };
         }
       );
@@ -107,8 +97,7 @@ export const resolvers = {
       };
     },
 
-    // get leave application history with filters, sorting, skipping, and limiting
-
+    // Get Leave Application History
     getApplicationHistory: async (
       _parent: any,
       args: {
@@ -134,7 +123,6 @@ export const resolvers = {
       const matchStage: any = {
         TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
         CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-        // IsDeleted: false,
       };
 
       if (args.employeeIdBase64) {
@@ -146,12 +134,7 @@ export const resolvers = {
 
       if (args.filter) {
         matchStage["$or"] = [
-          {
-            "EmployeeName.en.FullName": {
-              $regex: `.*${args.filter}.*`,
-              $options: "i",
-            },
-          },
+          { "EmployeeName.en.FullName": { $regex: `.*${args.filter}.*`, $options: "i" } },
           { EmployeeCode: { $regex: `^${args.filter}$`, $options: "i" } },
         ];
       }
@@ -191,9 +174,7 @@ export const resolvers = {
       }
 
       if (args.startDate && args.endDate) {
-        matchStage["LeavePeriod.StartDate"] = {
-          $gte: new Date(args.startDate),
-        };
+        matchStage["LeavePeriod.StartDate"] = { $gte: new Date(args.startDate) };
         matchStage["LeavePeriod.EndDate"] = { $lt: new Date(args.endDate) };
       }
 
@@ -201,10 +182,9 @@ export const resolvers = {
         const start = new Date(args.applicationDate);
         const end = new Date(args.applicationDate);
         end.setDate(end.getDate() + 1);
+
         matchStage.AppliedOn = { $gte: start, $lt: end };
       }
-
-      // console.log('Match Stage:', matchStage);
 
       const aggregationPipeline = [
         { $match: matchStage },
@@ -217,18 +197,15 @@ export const resolvers = {
             ApprovedOn: 1,
           },
         },
-        { $sort: { AppliedOn: -1 } }, // Sorting by application date descending
+        { $sort: { AppliedOn: -1 } },
         { $skip: args.skipCount || 0 },
         { $limit: args.maxResultCount || 10 },
       ];
 
-      // console.log('Aggregation Pipeline:', JSON.stringify(aggregationPipeline, null, 2));
       const result = await db
         .collection("EmployeeLeaveApplications")
         .aggregate(aggregationPipeline)
         .toArray();
-
-      // console.log('Application History Result:', result);
 
       return result.map((app: any) => ({
         applicationId: app._id.toString("base64"),
@@ -239,182 +216,109 @@ export const resolvers = {
       }));
     },
 
-   // get encashment applications with filters, sorting, skipping, and limiting
-
+    // Get Encashment Applications
     getEncashmentApplications: async (
-  _parent: any,
-  args: {
-    tenantIdBase64: string;
-    companyIdBase64: string;
-    filter?: string;
-    leaveTypeIdBase64?: string;
-    employeeLeaveTypeIdBase64?: string;
-    employeeIdBase64?: string;
-    unitOfLeave?: number;
-    approvalStatus?: string;
-    employeePlaceholderIdsBase64?: string[];
-    applicationDate?: string;
-    skipCount?: number;
-    maxResultCount?: number;
-  }
-) => {
-  const db = getDb();
-  const matchStage: any = {
-    TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-    CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-  };
+      _parent: any,
+      args: {
+        tenantIdBase64: string;
+        companyIdBase64: string;
+        filter?: string;
+        leaveTypeIdBase64?: string;
+        employeeLeaveTypeIdBase64?: string;
+        employeeIdBase64?: string;
+        unitOfLeave?: number;
+        approvalStatus?: string;
+        employeePlaceholderIdsBase64?: string[];
+        applicationDate?: string;
+        skipCount?: number;
+        maxResultCount?: number;
+      }
+    ) => {
+      const db = getDb();
 
-  if (args.employeeIdBase64) {
-    matchStage.EmployeeId = new Binary(
-      Buffer.from(args.employeeIdBase64, "base64"),
-      3
-    );
-  }
+      const matchStage: any = {
+        TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
+        CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+      };
 
-  if (args.filter) {
-    matchStage["$or"] = [
-      {
-        "EmployeeName.en.FullName": {
-          $regex: `.*${args.filter}.*`,
-          $options: "i",
+      if (args.employeeIdBase64) {
+        matchStage.EmployeeId = new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3);
+      }
+
+      if (args.filter) {
+        matchStage["$or"] = [
+          { "EmployeeName.en.FullName": { $regex: `.*${args.filter}.*`, $options: "i" } },
+          { EmployeeCode: { $regex: `^${args.filter}$`, $options: "i" } },
+        ];
+      }
+
+      if (args.leaveTypeIdBase64) {
+        matchStage.LeaveTypeId = new Binary(Buffer.from(args.leaveTypeIdBase64, "base64"), 3);
+      }
+
+      if (args.employeeLeaveTypeIdBase64) {
+        matchStage.EmployeeLeaveTypeId = new Binary(Buffer.from(args.employeeLeaveTypeIdBase64, "base64"), 3);
+      }
+
+      if (args.unitOfLeave !== undefined) {
+        matchStage.UnitOfLeave = args.unitOfLeave;
+      }
+
+      if (args.approvalStatus) {
+        matchStage.ApprovalStatus = parseInt(args.approvalStatus, 10);
+      }
+
+      if (args.employeePlaceholderIdsBase64) {
+        matchStage.EmployeePlaceholderId = {
+          $in: args.employeePlaceholderIdsBase64.map(
+            (id) => new Binary(Buffer.from(id, "base64"), 3)
+          ),
+        };
+      }
+
+      if (args.applicationDate) {
+        const start = new Date(args.applicationDate);
+        const end = new Date(args.applicationDate);
+        end.setDate(end.getDate() + 1);
+        matchStage.ApplicationDate = { $gte: start, $lt: end };
+      }
+
+      const aggregationPipeline = [
+        { $match: matchStage },
+        {
+          $project: {
+            _id: 1,
+            EmployeeName: 1,
+            EmployeeCode: 1,
+            LeaveTypeName: 1,
+            EncashmentQuantityApplied: 1,
+            AppliedOn: 1,
+            ApprovalStatus: 1,
+            IsPaid: 1,
+          },
         },
-      },
-      { EmployeeCode: { $regex: `^${args.filter}$`, $options: "i" } },
-    ];
-  }
+        { $sort: { AppliedOn: -1 } },
+        { $skip: args.skipCount || 0 },
+        { $limit: args.maxResultCount || 10 },
+      ];
 
-  if (args.leaveTypeIdBase64) {
-    matchStage.LeaveTypeId = new Binary(
-      Buffer.from(args.leaveTypeIdBase64, "base64"),
-      3
-    );
-  }
+      const result = await db
+        .collection("EmployeeLeaveEncashments")
+        .aggregate(aggregationPipeline)
+        .toArray();
 
-  if (args.employeeLeaveTypeIdBase64) {
-    matchStage.EmployeeLeaveTypeId = new Binary(
-      Buffer.from(args.employeeLeaveTypeIdBase64, "base64"),
-      3
-    );
-  }
-
-  if (args.unitOfLeave !== undefined) {
-    matchStage.UnitOfLeave = args.unitOfLeave;
-  }
-
-  if (args.approvalStatus) {
-    matchStage.ApprovalStatus = parseInt(args.approvalStatus, 10);
-  }
-
-  if (args.employeePlaceholderIdsBase64) {
-    matchStage.EmployeePlaceholderId = {
-      $in: args.employeePlaceholderIdsBase64.map(
-        (id) => new Binary(Buffer.from(id, "base64"), 3)
-      ),
-    };
-  }
-
-  if (args.applicationDate) {
-    const start = new Date(args.applicationDate);
-    const end = new Date(args.applicationDate);
-    end.setDate(end.getDate() + 1);
-    matchStage.ApplicationDate = { $gte: start, $lt: end };
-  }
-
-  // console.log("Match Stage:", matchStage);
-
-  const aggregationPipeline = [
-    { $match: matchStage },
-    {
-      $project: {
-        _id: 1,
-        EmployeeName: 1,
-        EmployeeCode: 1,
-        LeaveTypeName: 1,
-        EncashmentQuantityApplied: 1,
-        AppliedOn: 1,
-        ApprovalStatus: 1,
-        IsPaid: 1,
-      },
+      return result.map((encash: any) => ({
+        encashmentId: encash._id ? encash._id.toString('base64') : null,
+        employeeName: encash.EmployeeName?.en?.FullName || "N/A",
+        employeeCode: encash.EmployeeCode || "N/A",
+        leaveTypeName: encash.LeaveTypeName?.en?.Name || "N/A",
+        encashDays: encash.EncashmentQuantityApplied || 0,
+        appliedOn: encash.AppliedOn ? encash.AppliedOn.toISOString() : null,
+        approvalStatus: encash.ApprovalStatus !== undefined
+          ? encash.ApprovalStatus.toString()
+          : "N/A",
+        isPaid: encash.IsPaid ?? false,
+      }));
     },
-    { $sort: { AppliedOn: -1 } },
-    { $skip: args.skipCount || 0 },
-    { $limit: args.maxResultCount || 10 },
-  ];
-
-  // console.log(
-  //   "Aggregation Pipeline:",
-  //   JSON.stringify(aggregationPipeline, null, 2)
-  // );
-
-  const result = await db
-    .collection("EmployeeLeaveEncashments")
-    .aggregate(aggregationPipeline)
-    .toArray();
-
-  // console.log("Encashment Applications Result:", result);
-
-  return result.map((encash: any) => ({
-    encashmentId: encash._id ? encash._id.toString('base64') : null,
-    employeeName: encash.EmployeeName?.en?.FullName || "N/A",
-    employeeCode: encash.EmployeeCode || "N/A",
-    leaveTypeName: encash.LeaveTypeName?.en?.Name || "N/A",
-    encashDays: encash.EncashmentQuantityApplied || 0,
-    appliedOn: encash.AppliedOn ? encash.AppliedOn.toISOString() : null,
-    approvalStatus: encash.ApprovalStatus !== undefined
-      ? encash.ApprovalStatus.toString()
-      : "N/A",
-    isPaid: encash.IsPaid ?? false,
-  }));
-},
-
-
-
-    // getPendingTasks: async (_parent: any, args: { companyId: string; userId: string }) => {
-    //   const db = getDb();
-
-    //   const tasks = await db.collection('Tasks').find({
-    //     companyId: args.companyId,
-    //     userId: args.userId
-    //   }).toArray();
-
-    //   return tasks.map(task => ({
-    //     taskId: task.taskId,
-    //     description: task.description,
-    //     status: task.status
-    //   }));
-    // },
-
-    // getPendingApplications: async (_parent: any, args: { companyId: string; userId: string }) => {
-    //   const db = getDb();
-
-    //   const applications = await db.collection('LeaveApplications').find({
-    //     companyId: args.companyId,
-    //     employeeId: args.userId,
-    //     status: 'Pending'
-    //   }).toArray();
-
-    //   return applications.map(app => ({
-    //     applicationId: app.applicationId,
-    //     status: app.status,
-    //     type: app.type,
-    //     appliedDate: app.appliedDate
-    //   }));
-    // },
-
-    // getApplicationHistory: async (_parent: any, args: { companyId: string; employeeId: string }) => {
-    //   const db = getDb();
-
-    //   const history = await db.collection('LeaveApplications').find({
-    //     companyId: args.companyId,
-    //     employeeId: args.employeeId
-    //   }).toArray();
-
-    //   return history.map(app => ({
-    //     applicationId: app.applicationId,
-    //     status: app.status,
-    //     type: app.type,
-    //     appliedDate: app.appliedDate
-    //   }));
-    // }
   },
 };
