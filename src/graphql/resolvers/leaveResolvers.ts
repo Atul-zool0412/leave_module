@@ -194,7 +194,8 @@ console.log('Aggregation Pipeline:', JSON.stringify(aggregationPipeline, null, 2
         { $sort: { AppliedOn: -1 } }, // Sorting by application date descending
         { $skip: args.skipCount || 0 },
         { $limit: args.maxResultCount || 10 }
-      ];
+      ]; 
+      
       console.log('Aggregation Pipeline:', JSON.stringify(aggregationPipeline, null, 2));
       const result = await db
         .collection('EmployeeLeaveApplications')
