@@ -38,6 +38,17 @@ export const typeDefs = gql`
         approvedOn: String
     }
 
+    type EncashmentApplication {
+        encashmentId: ID!
+        employeeName: JSON
+        employeeCode: String
+        leaveTypeName: JSON
+        encashDays: Int
+        appliedOn: String
+        approvalStatus: String
+        isPaid: Boolean
+    }
+
     type Query {
         getLeaveBalance(
             tenantIdBase64: String!
@@ -67,5 +78,20 @@ export const typeDefs = gql`
             skipCount: Int
             maxResultCount: Int
         ): [LeaveApplication]
+
+        getEncashmentApplications(
+            tenantIdBase64: String!
+            companyIdBase64: String!
+            filter: String
+            leaveTypeIdBase64: String
+            employeeLeaveTypeIdBase64: String
+            employeeIdBase64: String
+            unitOfLeave: Int
+            approvalStatus: String
+            employeePlaceholderIdsBase64: [String]
+            applicationDate: String
+            skipCount: Int
+            maxResultCount: Int
+        ): [EncashmentApplication]
     }
 `;
