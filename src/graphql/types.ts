@@ -13,6 +13,7 @@ export const typeDefs = gql`
         leaveTypeName: JSON
         payType: Int
         unitOfLeave: Int
+        EmployeeName: JSON
         entitlementType: Int
         validity: Validity
         isActive: Boolean

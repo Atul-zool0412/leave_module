@@ -7,95 +7,107 @@ export const resolvers = {
 
   Query: {
     // Get Leave Balance
-    getLeaveBalance: async (
-      _parent: any,
-      args: {
-        tenantIdBase64: string;
-        companyIdBase64: string;
-        employeeIdBase64: string;
-        leaveTypeIdBase64?: string;
-      }
-    ) => {
-      const db = getDb();
+ getLeaveBalance: async (
+  _parent: any,
+  args: {
+    tenantIdBase64: string;
+    companyIdBase64: string;
+    employeeIdBase64: string;
+    leaveTypeIdBase64?: string;
+  }
+) => {
+  const db = getDb();
 
-      const aggregationPipeline = [
-        {
-          $match: {
-            TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-            CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-            EmployeeId: new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
-          },
-        },
-        {
-          $project: {
-            EmployeeId: 1,
-            EmployeeLeaveTypes: {
-              $cond: {
-                if: { $eq: [args.leaveTypeIdBase64 || null, null] },
-                then: "$EmployeeLeaveTypes",
-                else: {
-                  $filter: {
-                    input: "$EmployeeLeaveTypes",
-                    as: "elt",
-                    cond: {
-                      $eq: [
-                        "$$elt.LeaveTypeId",
-                        new Binary(Buffer.from(args.leaveTypeIdBase64!, "base64"), 3),
-                      ],
-                    },
-                  },
-                },
-              },
+  const aggregationPipeline = [
+    {
+      $match: {
+        TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
+        CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+        EmployeeId: new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
+      },
+    },
+    { $unwind: "$EmployeeLeaveTypes" }, // Unwind to work on individual leave types
+    {
+      $match: args.leaveTypeIdBase64
+        ? {
+            "EmployeeLeaveTypes.LeaveTypeId": new Binary(
+              Buffer.from(args.leaveTypeIdBase64, "base64"),
+              3
+            ),
+          }
+        : {},
+    },
+    {
+      $lookup: {
+        from: "EmployeeLeaveLedgerCollection",
+        let: { leaveTypeId: "$EmployeeLeaveTypes.LeaveTypeId" },
+        pipeline: [
+          {
+            $match: {
+              $expr: { $eq: ["$EmployeeLeaveTypeId", "$$leaveTypeId"] },
             },
           },
-        },
-      ];
-
-      const result = await db
-        .collection("EmployeeLeaveMapCollection")
-        .aggregate(aggregationPipeline)
-        .toArray();
-
-      if (result.length === 0) return null;
-
-      const leaveMap = result[0];
-
-      const leaveTypeIds = leaveMap.EmployeeLeaveTypes.map(
-        (lt: any) => lt.LeaveTypeId
-      );
-
-      const leaveBalances = await db
-        .collection("EmployeeLeaveLedger")
-        .find({
-          EmployeeLeaveTypeId: { $in: leaveTypeIds },
-        })
-        .toArray();
-
-      const employeeLeaveTypesWithBalance = leaveMap.EmployeeLeaveTypes.map(
-        (elt: any) => {
-          const balanceEntry = leaveBalances.find(
-            (lb: any) =>
-              lb.EmployeeLeaveTypeId.toString() === elt.LeaveTypeId.toString()
-          );
-
-          return {
-            leaveTypeId: elt.LeaveTypeId.buffer.toString("base64"),
-            leaveTypeName: elt.LeaveTypeName,
-            payType: elt.PayType,
-            unitOfLeave: elt.UnitOfLeave,
-            entitlementType: elt.LeaveEntitlementType,
-            validity: elt.Validity,
-            isActive: elt.IsActive,
-            currentBalance: balanceEntry ? balanceEntry.Balance : 0,
-          };
-        }
-      );
-
-      return {
-        employeeId: leaveMap.EmployeeId.buffer.toString("base64"),
-        employeeLeaveTypes: employeeLeaveTypesWithBalance,
-      };
+          {
+            $project: {
+              LeaveLedgers: 1,
+              EmployeeLeaveTypeId: 1,
+            },
+          },
+        ],
+        as: "LeaveBalanceRecords",
+      },
     },
+    {
+      $project: {
+        EmployeeId: 1,
+        EmployeeName: 1,
+        EmployeeLeaveType: "$EmployeeLeaveTypes",
+        LeaveBalanceRecords: 1,
+      },
+    },
+  ];
+
+  const result = await db
+    .collection("EmployeeLeaveMapCollection")
+    .aggregate(aggregationPipeline)
+    .toArray();
+
+  if (result.length === 0) return null;
+
+  const employeeLeaveTypesWithBalance = result.map((record: any) => {
+    const balanceRecord = record.LeaveBalanceRecords[0]; // Pick first matched ledger
+
+    const currentBalance =
+      balanceRecord &&
+      Array.isArray(balanceRecord.LeaveLedgers) &&
+      balanceRecord.LeaveLedgers.length > 0
+        ? balanceRecord.LeaveLedgers.sort(
+            (a: any, b: any) =>
+              new Date(b.Date).getTime() - new Date(a.Date).getTime()
+          )[0].LeaveBalance
+        : 0;
+
+    return {
+      leaveTypeId: record.EmployeeLeaveType.LeaveTypeId.buffer.toString(
+        "base64"
+      ),
+      EmployeeName: record.EmployeeName,
+      leaveTypeName: record.EmployeeLeaveType.LeaveTypeName,
+      payType: record.EmployeeLeaveType.PayType,
+      unitOfLeave: record.EmployeeLeaveType.UnitOfLeave,
+      entitlementType: record.EmployeeLeaveType.LeaveEntitlementType,
+      validity: record.EmployeeLeaveType.Validity,
+      isActive: record.EmployeeLeaveType.IsActive,
+      currentBalance,
+    };
+  });
+
+  return {
+    employeeId: result[0].EmployeeId.buffer.toString("base64"),
+    employeeLeaveTypes: employeeLeaveTypesWithBalance,
+  };
+},
+
 
     // Get Leave Application History
     getApplicationHistory: async (
