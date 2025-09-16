@@ -25,12 +25,6 @@ export const typeDefs = gql`
         employeeLeaveTypes: [EmployeeLeaveType]
     }
 
-    type Task {
-        taskId: ID!
-        description: String
-        status: String
-    }
-
     type LeaveApplication {
         applicationId: ID!
         status: String
@@ -58,15 +52,6 @@ export const typeDefs = gql`
             leaveTypeIdBase64: String
         ): LeaveBalance
 
-        getPendingTasks(
-            companyId: ID!
-            userId: ID!
-        ): [Task]
-
-        getPendingApplications(
-            companyId: ID!
-            userId: ID!
-        ): [LeaveApplication]
 
         getApplicationHistory(
             tenantIdBase64: String!
