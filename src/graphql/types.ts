@@ -3,17 +3,31 @@ import { gql } from "apollo-server";
 export const typeDefs = gql`
   scalar JSON
 
+  # ----------------- Shared Types -----------------
   type Validity {
-    StartDate: String
-    EndDate: String
+    startDate: String
+    endDate: String
   }
 
+  # ----------------- Todo List -----------------
+  type TodoItem {
+    _id: ID!
+    companyId: String
+    employeeId: String
+    status: String
+    taskName: JSON
+    leavePeriod: JSON
+    expectedResumptionDate: String
+    createdAt: String
+  }
+
+  # ----------------- Leave Balance -----------------
   type EmployeeLeaveType {
     leaveTypeId: ID
     leaveTypeName: JSON
     payType: Int
     unitOfLeave: Int
-    EmployeeName: JSON
+    employeeName: JSON
     entitlementType: Int
     validity: Validity
     isActive: Boolean
@@ -25,6 +39,32 @@ export const typeDefs = gql`
     employeeLeaveTypes: [EmployeeLeaveType]
   }
 
+  # ----------------- Pending Applications -----------------
+  type EmployeeInfo {
+    employeeId: ID
+    name: String
+    employeeCode: String
+    email: String
+  }
+
+type MyPendingApplication {
+  _id: ID
+  companyId: ID
+  employeeId: ID
+  status: String
+  TaskName: JSON
+  taskModule: String
+  totalApprovalStages: Int
+  createdAt: String
+  leaveType: JSON
+  leavePeriod: JSON
+  resumptionDate: JSON
+  employee: EmployeeInfo
+  moduleData: JSON
+}
+
+
+  # ----------------- Leave Applications -----------------
   type LeaveApplication {
     applicationId: ID!
     status: String
@@ -33,6 +73,7 @@ export const typeDefs = gql`
     approvedOn: String
   }
 
+  # ----------------- Encashment Applications -----------------
   type EncashmentApplication {
     encashmentId: ID!
     employeeName: JSON
@@ -44,18 +85,15 @@ export const typeDefs = gql`
     isPaid: Boolean
   }
 
-type TodoItem {
-    _id: ID!
-    companyId: String
-    employeeId: String      # Changed from userId to employeeId
-    status: String
-    TaskName: JSON
-    leavePeriod: JSON
-    ExpectedResumptionDate: String
-    createdAt: String
-}
-
+  # ----------------- Queries -----------------
   type Query {
+    # Todo list
+    getTodoList(
+      companyIdBase64: String!
+      employeeIdBase64: String!
+    ): [TodoItem]
+
+    # Leave balance
     getLeaveBalance(
       tenantIdBase64: String!
       companyIdBase64: String!
@@ -63,6 +101,7 @@ type TodoItem {
       leaveTypeIdBase64: String
     ): LeaveBalance
 
+    # Leave history
     getApplicationHistory(
       tenantIdBase64: String!
       companyIdBase64: String!
@@ -81,6 +120,7 @@ type TodoItem {
       maxResultCount: Int
     ): [LeaveApplication]
 
+    # Encashment history
     getEncashmentApplications(
       tenantIdBase64: String!
       companyIdBase64: String!
@@ -95,9 +135,12 @@ type TodoItem {
       skipCount: Int
       maxResultCount: Int
     ): [EncashmentApplication]
-    getTodoList(
-    companyIdBase64: String!,
-    employeeIdBase64: String!
-    ): [TodoItem]
+
+    # My pending apps
+    getMyPendingApplications(
+      companyIdBase64: String!
+      employeeIdBase64: String!
+      isPending: Boolean!
+    ): [MyPendingApplication]
   }
 `;

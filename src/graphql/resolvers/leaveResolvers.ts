@@ -11,53 +11,51 @@ export const resolvers = {
   JSON: GraphQLJSON,
 
   Query: {
-getTodoList: async (
-  _parent: any,
-  args: { companyIdBase64: string; employeeIdBase64: string }
-) => {
-  await connectDB(Task_DB_NAME);
-  const db = getDb(Task_DB_NAME);
+    getTodoList: async (
+      _parent: any,
+      args: { companyIdBase64: string; employeeIdBase64: string }
+    ) => {
+      await connectDB(Task_DB_NAME);
+      const db = getDb(Task_DB_NAME);
 
-  const aggregationPipeline = [
-    {
-      $match: {
-        CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-        "Employee.EmployeeId": new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
-        Status: 1, // Pending
-      },
+      const aggregationPipeline = [
+        {
+          $match: {
+            CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+            "Employee.EmployeeId": new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
+            Status: 1, // Pending
+          },
+        },
+        { $unwind: { path: "$ModuleData", preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            _id: 1,
+            CompanyId: 1,
+            EmployeeId: "$Employee.EmployeeId",
+            Status: 1,
+            TaskName: 1,
+            CreationTime: 1,
+            LeavePeriod: "$ModuleData.keyValuePair.Leave Period",
+            ExpectedResumptionDate: "$ModuleData.keyValuePair.Expected Resumption Date" // Extract Leave Period
+          },
+        },
+        { $sort: { CreationTime: -1 } },
+        { $limit: 50 },
+      ];
+
+      const result = await db.collection("TodoTaskApproval").aggregate(aggregationPipeline).toArray();
+
+      return result.map((todo: any) => ({
+        _id: todo._id.toString("base64"),
+        companyId: todo.CompanyId?.buffer?.toString("base64") || null,
+        employeeId: todo.EmployeeId?.buffer?.toString("base64") || null,
+        status: todo.Status === 1 ? "Pending" : "Completed",
+        TaskName: todo.TaskName || {},  // Return the whole JSON object
+        leavePeriod: todo.LeavePeriod || {},
+        ExpectedResumptionDate: todo.ExpectedResumptionDate?.en, // Return Leave Period in English
+        createdAt: todo.CreationTime ? todo.CreationTime.toISOString() : null,
+      }));
     },
-    { $unwind: { path: "$ModuleData", preserveNullAndEmptyArrays: true } },
-    {
-      $project: {
-        _id: 1,
-        CompanyId: 1,
-        EmployeeId: "$Employee.EmployeeId",
-        Status: 1,
-        TaskName: 1,
-        CreationTime: 1,
-        LeavePeriod: "$ModuleData.keyValuePair.Leave Period",
-        ExpectedResumptionDate: "$ModuleData.keyValuePair.Expected Resumption Date" // Extract Leave Period
-      },
-    },
-    { $sort: { CreationTime: -1 } },
-    { $limit: 50 },
-  ];
-
-  const result = await db.collection("TodoTaskApproval").aggregate(aggregationPipeline).toArray();
-
-  return result.map((todo: any) => ({
-    _id: todo._id.toString("base64"),
-    companyId: todo.CompanyId?.buffer?.toString("base64") || null,
-    employeeId: todo.EmployeeId?.buffer?.toString("base64") || null,
-    status: todo.Status === 1 ? "Pending" : "Completed",
-    TaskName: todo.TaskName || {},  // Return the whole JSON object
-    leavePeriod: todo.LeavePeriod || {},
-    ExpectedResumptionDate: todo.ExpectedResumptionDate?.en, // Return Leave Period in English
-    createdAt: todo.CreationTime ? todo.CreationTime.toISOString() : null,
-  }));
-},
-
-
 
     // Get Leave Balance
     getLeaveBalance: async (
@@ -90,11 +88,11 @@ getTodoList: async (
         {
           $match: args.leaveTypeIdBase64
             ? {
-                "EmployeeLeaveTypes.LeaveTypeId": new Binary(
-                  Buffer.from(args.leaveTypeIdBase64, "base64"),
-                  3
-                ),
-              }
+              "EmployeeLeaveTypes.LeaveTypeId": new Binary(
+                Buffer.from(args.leaveTypeIdBase64, "base64"),
+                3
+              ),
+            }
             : {},
         },
         {
@@ -139,12 +137,12 @@ getTodoList: async (
 
         const currentBalance =
           balanceRecord &&
-          Array.isArray(balanceRecord.LeaveLedgers) &&
-          balanceRecord.LeaveLedgers.length > 0
+            Array.isArray(balanceRecord.LeaveLedgers) &&
+            balanceRecord.LeaveLedgers.length > 0
             ? balanceRecord.LeaveBalanceRecords.sort(
-                (a: any, b: any) =>
-                  new Date(b.Date).getTime() - new Date(a.Date).getTime()
-              )[0].LeaveBalance
+              (a: any, b: any) =>
+                new Date(b.Date).getTime() - new Date(a.Date).getTime()
+            )[0].LeaveBalance
             : 0;
 
         return {
@@ -166,6 +164,83 @@ getTodoList: async (
         employeeLeaveTypes: employeeLeaveTypesWithBalance,
       };
     },
+getMyPendingApplications: async (
+  _parent: any,
+  args: { companyIdBase64: string; employeeIdBase64: string; isPending: boolean }
+) => {
+  await connectDB(Task_DB_NAME);
+  const db = getDb(Task_DB_NAME);
+
+  // Convert inputs properly
+  const companyId = new Binary(Buffer.from(args.companyIdBase64, "base64"), 3);
+  const employeeId = new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3);
+
+  // Build match
+  const matchStage: any = {
+    CompanyId: companyId,
+    "Employee.EmployeeId": employeeId,
+    $or: [{ IsDeleted: false }, { IsDeleted: { $exists: false } }],
+  };
+
+  if (args.isPending) {
+    matchStage.ApprovalStatus = { $in: [1, "1", "Pending"] };
+  }
+
+  const aggregationPipeline = [
+    { $match: matchStage },
+    {
+      $project: {
+        _id: 1,
+        CompanyId: 1,
+        EmployeeId: "$Employee.EmployeeId",
+        ApprovalStatus: 1,
+       TaskName: { $ifNull: ["$TaskDefinition.TaskName", "$ModuleData.TaskName"] },
+        TaskModule: "$TaskModule.Name",
+        CreationTime: 1,
+        TotalApprovalStages: 1,
+        LeaveType: "$ModuleData.keyValuePair.Leave Type",
+        LeavePeriod: "$ModuleData.keyValuePair.Leave Period",
+        ResumptionDate: "$ModuleData.keyValuePair.Resumption Date",
+      },
+    },
+    { $sort: { CreationTime: -1 } },
+    { $limit: 50 },
+  ];
+
+  console.log("Aggregation Pipeline:", JSON.stringify(aggregationPipeline, null, 2));
+
+  const result = await db
+    .collection("TaskApprovals")
+    .aggregate(aggregationPipeline)
+    .toArray();
+
+  console.log("Aggregation result:", result);
+
+  return result.map((doc: any) => ({
+    _id: doc._id?.buffer?.toString("base64") || null,
+    companyId: doc.CompanyId?.buffer?.toString("base64") || null,
+    employeeId: doc.EmployeeId?.buffer?.toString("base64") || null,
+    status:
+      doc.ApprovalStatus === 1 || doc.ApprovalStatus === "1" || doc.ApprovalStatus === "Pending"
+        ? "Pending"
+        : doc.ApprovalStatus === 2 || doc.ApprovalStatus === "2"
+        ? "Approved"
+        : doc.ApprovalStatus === 3 || doc.ApprovalStatus === "3"
+        ? "Rejected"
+        : "Unknown",
+    TaskName: doc.TaskName || {},
+    taskModule: doc.TaskModule || null,
+    totalApprovalStages: doc.TotalApprovalStages || null,
+    leaveType: doc.LeaveType || {},
+    leavePeriod: doc.LeavePeriod || {},
+    resumptionDate: doc.ResumptionDate || {},
+    createdAt: doc.CreationTime ? new Date(doc.CreationTime).toISOString() : null,
+  }));
+},
+
+
+
+
 
     // Get Leave Application History
     getApplicationHistory: async (
