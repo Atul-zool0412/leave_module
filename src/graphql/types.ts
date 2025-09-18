@@ -1,89 +1,103 @@
-import { gql } from 'apollo-server';
+import { gql } from "apollo-server";
 
 export const typeDefs = gql`
-    scalar JSON
+  scalar JSON
 
-    type Validity {
-        StartDate: String
-        EndDate: String
-    }
+  type Validity {
+    StartDate: String
+    EndDate: String
+  }
 
-    type EmployeeLeaveType {
-        leaveTypeId: ID
-        leaveTypeName: JSON
-        payType: Int
-        unitOfLeave: Int
-        EmployeeName: JSON
-        entitlementType: Int
-        validity: Validity
-        isActive: Boolean
-        currentBalance: Float
-    }
+  type EmployeeLeaveType {
+    leaveTypeId: ID
+    leaveTypeName: JSON
+    payType: Int
+    unitOfLeave: Int
+    EmployeeName: JSON
+    entitlementType: Int
+    validity: Validity
+    isActive: Boolean
+    currentBalance: Float
+  }
 
-    type LeaveBalance {
-        employeeId: ID!
-        employeeLeaveTypes: [EmployeeLeaveType]
-    }
+  type LeaveBalance {
+    employeeId: ID!
+    employeeLeaveTypes: [EmployeeLeaveType]
+  }
 
-    type LeaveApplication {
-        applicationId: ID!
-        status: String
-        leaveTypeName: JSON
-        appliedOn: String
-        approvedOn: String
-    }
+  type LeaveApplication {
+    applicationId: ID!
+    status: String
+    leaveTypeName: JSON
+    appliedOn: String
+    approvedOn: String
+  }
 
-    type EncashmentApplication {
-        encashmentId: ID!
-        employeeName: JSON
-        employeeCode: String
-        leaveTypeName: JSON
-        encashDays: Int
-        appliedOn: String
-        approvalStatus: String
-        isPaid: Boolean
-    }
+  type EncashmentApplication {
+    encashmentId: ID!
+    employeeName: JSON
+    employeeCode: String
+    leaveTypeName: JSON
+    encashDays: Int
+    appliedOn: String
+    approvalStatus: String
+    isPaid: Boolean
+  }
 
-    type Query {
-        getLeaveBalance(
-            tenantIdBase64: String!
-            companyIdBase64: String!
-            employeeIdBase64: String!
-            leaveTypeIdBase64: String
-        ): LeaveBalance
+type TodoItem {
+    _id: ID!
+    companyId: String
+    employeeId: String      # Changed from userId to employeeId
+    status: String
+    TaskName: JSON
+    leavePeriod: JSON
+    ExpectedResumptionDate: String
+    createdAt: String
+}
 
+  type Query {
+    getLeaveBalance(
+      tenantIdBase64: String!
+      companyIdBase64: String!
+      employeeIdBase64: String!
+      leaveTypeIdBase64: String
+    ): LeaveBalance
 
-        getApplicationHistory(
-            tenantIdBase64: String!
-            companyIdBase64: String!
-            filter: String
-            leaveTypeIdBase64: String
-            employeeLeaveTypeIdBase64: String
-            employeeIdBase64: String
-            unitOfLeave: Int
-            payType: Int
-            approvalStatus: String
-            employeePlaceholderIdsBase64: [String]
-            startDate: String
-            endDate: String
-            applicationDate: String
-            skipCount: Int
-            maxResultCount: Int
-        ): [LeaveApplication]
+    getApplicationHistory(
+      tenantIdBase64: String!
+      companyIdBase64: String!
+      filter: String
+      leaveTypeIdBase64: String
+      employeeLeaveTypeIdBase64: String
+      employeeIdBase64: String
+      unitOfLeave: Int
+      payType: Int
+      approvalStatus: String
+      employeePlaceholderIdsBase64: [String]
+      startDate: String
+      endDate: String
+      applicationDate: String
+      skipCount: Int
+      maxResultCount: Int
+    ): [LeaveApplication]
 
-        getEncashmentApplications(
-            tenantIdBase64: String!
-            companyIdBase64: String!
-            filter: String
-            leaveTypeIdBase64: String
-            employeeLeaveTypeIdBase64: String
-            employeeIdBase64: String
-            unitOfLeave: Int
-            approvalStatus: String
-            employeePlaceholderIdsBase64: [String]
-            applicationDate: String
-            skipCount: Int
-            maxResultCount: Int
-        ): [EncashmentApplication]
-    }
+    getEncashmentApplications(
+      tenantIdBase64: String!
+      companyIdBase64: String!
+      filter: String
+      leaveTypeIdBase64: String
+      employeeLeaveTypeIdBase64: String
+      employeeIdBase64: String
+      unitOfLeave: Int
+      approvalStatus: String
+      employeePlaceholderIdsBase64: [String]
+      applicationDate: String
+      skipCount: Int
+      maxResultCount: Int
+    ): [EncashmentApplication]
+    getTodoList(
+    companyIdBase64: String!,
+    employeeIdBase64: String!
+    ): [TodoItem]
+  }
 `;
