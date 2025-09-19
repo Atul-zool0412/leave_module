@@ -207,14 +207,14 @@ getMyPendingApplications: async (
     { $limit: 50 },
   ];
 
-  console.log("Aggregation Pipeline:", JSON.stringify(aggregationPipeline, null, 2));
+  // console.log("Aggregation Pipeline:", JSON.stringify(aggregationPipeline, null, 2));
 
   const result = await db
     .collection("TaskApprovals")
     .aggregate(aggregationPipeline)
     .toArray();
 
-  console.log("Aggregation result:", result);
+  // console.log("Aggregation result:", result);
 
   return result.map((doc: any) => ({
     _id: doc._id?.buffer?.toString("base64") || null,
