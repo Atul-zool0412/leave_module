@@ -4,7 +4,7 @@ export const typeDefs = gql`
   scalar JSON
 
   # ----------------- Shared Types -----------------
-  type Validity {
+  type validity {
     startDate: String
     endDate: String
   }
@@ -29,7 +29,7 @@ export const typeDefs = gql`
     unitOfLeave: Int
     employeeName: JSON
     entitlementType: Int
-    validity: Validity
+    validity: validity
     isActive: Boolean
     currentBalance: Float
   }
@@ -47,22 +47,21 @@ export const typeDefs = gql`
     email: String
   }
 
-type MyPendingApplication {
-  _id: ID
-  companyId: ID
-  employeeId: ID
-  status: String
-  TaskName: JSON
-  taskModule: String
-  totalApprovalStages: Int
-  createdAt: String
-  leaveType: JSON
-  leavePeriod: JSON
-  resumptionDate: JSON
-  employee: EmployeeInfo
-  moduleData: JSON
-}
-
+  type MyPendingApplication {
+    _id: ID
+    companyId: ID
+    employeeId: ID
+    status: String
+    taskName: JSON
+    taskModule: String
+    totalApprovalStages: Int
+    createdAt: String
+    leaveType: JSON
+    leavePeriod: JSON
+    resumptionDate: JSON
+    employee: EmployeeInfo
+    moduleData: JSON
+  }
 
   # ----------------- Leave Applications -----------------
   type LeaveApplication {
@@ -83,6 +82,15 @@ type MyPendingApplication {
     appliedOn: String
     approvalStatus: String
     isPaid: Boolean
+  }
+
+  # ----------------- Dashboard Data -----------------
+  type DashboardData {
+    todoList: [TodoItem]
+    pendingApplications: [MyPendingApplication]
+    leaveBalance: LeaveBalance
+    applicationHistory: [LeaveApplication]
+    encashmentApplications: [EncashmentApplication]
   }
 
   # ----------------- Queries -----------------
@@ -142,5 +150,12 @@ type MyPendingApplication {
       employeeIdBase64: String!
       isPending: Boolean!
     ): [MyPendingApplication]
+
+    # Dashboard
+    getDashboardData(
+      tenantIdBase64: String!
+      companyIdBase64: String!
+      employeeIdBase64: String!
+    ): DashboardData
   }
 `;

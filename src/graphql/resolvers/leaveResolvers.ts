@@ -5,7 +5,7 @@ import GraphQLJSON from "graphql-type-json";
 import connectDB, { getDb } from "../../config/db";
 
 const LEAVE_DB_NAME = process.env.LEAVE_DB_NAME || "LeaveSvcNET8test";
-const Task_DB_NAME = process.env.TASK_DB_NAME || "TaskMgmtSvcNET8test";
+const TASK_DB_NAME = process.env.TASK_DB_NAME || "TaskMgmtSvcNET8test";
 
 export const resolvers = {
   JSON: GraphQLJSON,
@@ -15,8 +15,8 @@ export const resolvers = {
       _parent: any,
       args: { companyIdBase64: string; employeeIdBase64: string }
     ) => {
-      await connectDB(Task_DB_NAME);
-      const db = getDb(Task_DB_NAME);
+      await connectDB(TASK_DB_NAME);
+      const db = getDb(TASK_DB_NAME);
 
       const aggregationPipeline = [
         {
@@ -50,9 +50,9 @@ export const resolvers = {
         companyId: todo.CompanyId?.buffer?.toString("base64") || null,
         employeeId: todo.EmployeeId?.buffer?.toString("base64") || null,
         status: todo.Status === 1 ? "Pending" : "Completed",
-        TaskName: todo.TaskName || {},  // Return the whole JSON object
+        taskName: todo.TaskName || {},  // Return the whole JSON object
         leavePeriod: todo.LeavePeriod || {},
-        ExpectedResumptionDate: todo.ExpectedResumptionDate?.en, // Return Leave Period in English
+        expectedResumptionDate: todo.ExpectedResumptionDate?.en, // Return Leave Period in English
         createdAt: todo.CreationTime ? todo.CreationTime.toISOString() : null,
       }));
     },
@@ -168,8 +168,8 @@ getMyPendingApplications: async (
   _parent: any,
   args: { companyIdBase64: string; employeeIdBase64: string; isPending: boolean }
 ) => {
-  await connectDB(Task_DB_NAME);
-  const db = getDb(Task_DB_NAME);
+  await connectDB(TASK_DB_NAME);
+  const db = getDb(TASK_DB_NAME);
 
   // Convert inputs properly
   const companyId = new Binary(Buffer.from(args.companyIdBase64, "base64"), 3);
@@ -488,6 +488,33 @@ getMyPendingApplications: async (
             : "N/A",
         isPaid: encash.IsPaid ?? false,
       }));
+    },
+
+
+    // -----------------------------
+    // Dashboard API
+    // -----------------------------
+    getDashboardData: async (_parent: any, args: { tenantIdBase64: string; companyIdBase64: string; employeeIdBase64: string }) => {
+      try {
+        const [todoList, pendingApplications, leaveBalance, applicationHistory, encashmentApplications] = await Promise.all([
+          resolvers.Query.getTodoList(_parent, { companyIdBase64: args.companyIdBase64, employeeIdBase64: args.employeeIdBase64 }),
+          resolvers.Query.getMyPendingApplications(_parent, { companyIdBase64: args.companyIdBase64, employeeIdBase64: args.employeeIdBase64, isPending: true }),
+          resolvers.Query.getLeaveBalance(_parent, { tenantIdBase64: args.tenantIdBase64, companyIdBase64: args.companyIdBase64, employeeIdBase64: args.employeeIdBase64 }),
+          resolvers.Query.getApplicationHistory(_parent, { tenantIdBase64: args.tenantIdBase64, companyIdBase64: args.companyIdBase64, employeeIdBase64: args.employeeIdBase64 }),
+          resolvers.Query.getEncashmentApplications(_parent, { tenantIdBase64: args.tenantIdBase64, companyIdBase64: args.companyIdBase64, employeeIdBase64: args.employeeIdBase64 }),
+        ]);
+
+        return {
+          todoList,
+          pendingApplications,
+          leaveBalance,
+          applicationHistory,
+          encashmentApplications,
+        };
+      } catch (error) {
+        console.error("Error fetching dashboard data:", error);
+        throw new Error("Failed to fetch dashboard data");
+      }
     },
   },
 };
