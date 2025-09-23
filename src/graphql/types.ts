@@ -22,21 +22,44 @@ export const typeDefs = gql`
   }
 
   # ----------------- Leave Balance -----------------
-  type EmployeeLeaveType {
+  type TransactionSummary {
+    totalCredits: Float
+    totalEncashed: Float
+    totalExpired: Float
+    totalCarriedForward: Float
+    totalTaken: Float
+    netBalance: Float
+  }
+
+  type TransactionTypeBreakdown {
+    notApplicable: Int
+    accrual: Int
+    creditedReset: Int
+    leaveAttached: Int
+    policyStart: Int
+    carryForwardExpiry: Int
+    leaveBooked: Int
+    leaveCancelled: Int
+    leaveBalanceReset: Int
+  }
+
+  type EmployeeLeaveTypeBalance {
     leaveTypeId: ID
-    leaveTypeName: JSON
-    payType: Int
-    unitOfLeave: Int
-    employeeName: JSON
-    entitlementType: Int
-    validity: validity
-    isActive: Boolean
+    leaveTypeName: String
     currentBalance: Float
+    daysCredited: Float
+    daysEncashed: Float
+    daysExpired: Float
+    daysCarriedForward: Float
+    daysTaken: Float
+    summaryText: String
+    transactionSummary: TransactionSummary
+    transactionTypeBreakdown: TransactionTypeBreakdown
   }
 
   type LeaveBalance {
     employeeId: ID!
-    employeeLeaveTypes: [EmployeeLeaveType]
+    employeeLeaveTypes: [EmployeeLeaveTypeBalance]
   }
 
   # ----------------- Pending Applications -----------------
@@ -101,12 +124,11 @@ export const typeDefs = gql`
       employeeIdBase64: String!
     ): [TodoItem]
 
-    # Leave balance
+    # Leave balance (updated with dashboard metrics)
     getLeaveBalance(
       tenantIdBase64: String!
       companyIdBase64: String!
       employeeIdBase64: String!
-      leaveTypeIdBase64: String
     ): LeaveBalance
 
     # Leave history
