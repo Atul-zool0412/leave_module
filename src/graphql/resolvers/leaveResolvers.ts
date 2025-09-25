@@ -70,304 +70,146 @@ export const resolvers = {
       await connectDB(LEAVE_DB_NAME);
       const db = getDb(LEAVE_DB_NAME);
 
+      const today = new Date();
+
+      // 1. Fetch employee details
+      const employee = await db.collection("EmployeeLeaveMapCollection").findOne({
+        TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
+        CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+        EmployeeCode: args.employeeIdBase64,
+        IsDeleted: false,
+      });
+
+      if (!employee) throw new Error("Employee not found");
+
+      // 2. Aggregate leave transactions per leave type
       const aggregationPipeline = [
         {
           $match: {
             TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
             CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-            EmployeeCode: args.employeeIdBase64, // EmployeeCode is plain string
+            EmployeeCode: args.employeeIdBase64,
             IsDeleted: false,
-          },
+          }
         },
         { $unwind: "$LeaveLedgers" },
+        { $match: { "LeaveLedgers.Date": { $lte: today } } },
         {
           $addFields: {
-            "LeaveLedgers.LeaveAddedNum": {
-              $toDouble: { $ifNull: ["$LeaveLedgers.LeaveAdded", 0] },
-            },
-            "LeaveLedgers.LeaveUsedNum": {
-              $toDouble: { $ifNull: ["$LeaveLedgers.LeaveUsed", 0] },
-            },
-            "LeaveLedgers.LeaveBalanceNum": {
-              $toDouble: { $ifNull: ["$LeaveLedgers.LeaveBalance", 0] },
-            },
-          },
+            leaveAddedNum: { $toDouble: { $ifNull: ["$LeaveLedgers.LeaveAdded", 0] } },
+            leaveUsedNum: { $toDouble: { $ifNull: ["$LeaveLedgers.LeaveUsed", 0] } },
+            unitOfLeave: { $toInt: { $ifNull: ["$LeaveLedgers.UnitOfLeave", 1] } },
+          }
         },
         {
           $group: {
-            _id: "$LeaveTypeId",
-            leaveTypeName: { $first: "$LeaveTypeName.en.Name" },
-            currentBalance: { $last: "$LeaveLedgers.LeaveBalanceNum" },
-
-            // ----------------------
-            // Days Calculations
-            // ----------------------
-            daysCredited: {
+            _id: { leaveTypeId: "$LeaveTypeId", transactionType: "$LeaveLedgers.TransactionType" },
+            leaveTypeName: { $first: "$LeaveTypeName" },
+            totalAdded: { $sum: "$leaveAddedNum" },
+            totalUsed: { $sum: "$leaveUsedNum" },
+            unitOfLeave: { $first: "$unitOfLeave" },
+          }
+        },
+        {
+          $group: {
+            _id: "$_id.leaveTypeId",
+            leaveTypeName: { $first: "$leaveTypeName" },
+            transactionCounts: {
+              $push: {
+                transactionType: "$_id.transactionType",
+                leaveAdded: "$totalAdded",
+                leaveUsed: "$totalUsed",
+                unitOfLeave: "$unitOfLeave",
+              }
+            },
+            totalCredit: {
               $sum: {
                 $cond: [
-                  {
-                    $in: [
-                      "$LeaveLedgers.TransactionType",
-                      [TransactionType.Accrual, TransactionType.CreditedReset],
-                    ],
-                  },
-                  "$LeaveLedgers.LeaveAddedNum",
-                  0,
-                ],
-              },
+                  { $in: ["$_id.transactionType", [TransactionType.Accrual, TransactionType.CreditedReset]] },
+                  "$totalAdded",
+                  0
+                ]
+              }
             },
-            daysEncashed: {
+            totalDebit: {
               $sum: {
                 $cond: [
-                  { $eq: ["$LeaveLedgers.TransactionType", TransactionType.LeaveBalanceReset] },
-                  "$LeaveLedgers.LeaveUsedNum",
-                  0,
-                ],
+                  { $not: { $in: ["$_id.transactionType", [TransactionType.Accrual, TransactionType.CreditedReset]] } },
+                  "$totalUsed",
+                  0
+                ]
+              }
+            }
+          }
+        },
+        // Lookup PayType and LeaveEntitlementType from EmployeeLeaveMapCollection
+        {
+          $lookup: {
+            from: "EmployeeLeaveMapCollection",
+            let: { leaveTypeId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
+                  CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+                  EmployeeCode: args.employeeIdBase64,
+                  IsDeleted: false
+                }
               },
-            },
-            daysExpired: {
-              $sum: {
-                $cond: [
-                  {
-                    $eq: [
-                      "$LeaveLedgers.TransactionType",
-                      TransactionType.CarryForwardExpiry,
-                    ],
-                  },
-                  "$LeaveLedgers.LeaveUsedNum",
-                  0,
-                ],
-              },
-            },
-            daysCarriedForward: {
-              $sum: {
-                $cond: [
-                  {
-                    $and: [
-                      {
-                        $eq: [
-                          "$LeaveLedgers.TransactionType",
-                          TransactionType.CreditedReset,
-                        ],
-                      },
-                      {
-                        $regexMatch: {
-                          input: "$LeaveLedgers.Remarks",
-                          regex: "carry forward",
-                          options: "i",
-                        },
-                      },
-                    ],
-                  },
-                  { $abs: "$LeaveLedgers.LeaveUsedNum" },
-                  0,
-                ],
-              },
-            },
-            daysTaken: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$LeaveLedgers.TransactionType", TransactionType.LeaveBooked] },
-                  "$LeaveLedgers.LeaveUsedNum",
-                  0,
-                ],
-              },
-            },
-
-            // ----------------------
-            // Transaction Breakdown
-            // ----------------------
-            notApplicable: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$LeaveLedgers.TransactionType", TransactionType.NotApplicable] },
-                  1,
-                  0,
-                ],
-              },
-            },
-            accrual: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$LeaveLedgers.TransactionType", TransactionType.Accrual] },
-                  1,
-                  0,
-                ],
-              },
-            },
-            creditedReset: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$LeaveLedgers.TransactionType", TransactionType.CreditedReset] },
-                  1,
-                  0,
-                ],
-              },
-            },
-            leaveAttached: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$LeaveLedgers.TransactionType", TransactionType.LeaveAttached] },
-                  1,
-                  0,
-                ],
-              },
-            },
-            policyStart: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$LeaveLedgers.TransactionType", TransactionType.PolicyStart] },
-                  1,
-                  0,
-                ],
-              },
-            },
-            carryForwardExpiry: {
-              $sum: {
-                $cond: [
-                  {
-                    $eq: ["$LeaveLedgers.TransactionType", TransactionType.CarryForwardExpiry],
-                  },
-                  1,
-                  0,
-                ],
-              },
-            },
-            leaveBooked: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$LeaveLedgers.TransactionType", TransactionType.LeaveBooked] },
-                  1,
-                  0,
-                ],
-              },
-            },
-            leaveCancelled: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$LeaveLedgers.TransactionType", TransactionType.LeaveCancelled] },
-                  1,
-                  0,
-                ],
-              },
-            },
-            leaveBalanceReset: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$LeaveLedgers.TransactionType", TransactionType.LeaveBalanceReset] },
-                  1,
-                  0,
-                ],
-              },
-            },
-          },
+              { $unwind: "$EmployeeLeaveTypes" },
+              { $match: { $expr: { $eq: ["$EmployeeLeaveTypes.LeaveTypeId", "$$leaveTypeId"] } } },
+              { $project: { PayType: "$EmployeeLeaveTypes.PayType", LeaveEntitlementType: "$EmployeeLeaveTypes.LeaveEntitlementType", _id: 0 } }
+            ],
+            as: "leaveMap"
+          }
+        },
+        {
+          $unwind: { path: "$leaveMap", preserveNullAndEmptyArrays: true }
         },
         {
           $project: {
-            _id: 0,
-            leaveTypeId: "$_id",
-            leaveTypeName: 1,
-            currentBalance: { $toInt: "$currentBalance" },
-            daysCredited: { $toInt: "$daysCredited" },
-            daysEncashed: { $toInt: "$daysEncashed" },
-            daysExpired: { $toInt: "$daysExpired" },
-            daysCarriedForward: { $toInt: "$daysCarriedForward" },
-            daysTaken: { $toInt: "$daysTaken" },
-
-            // summary text
-            summaryText: {
-              $trim: {
-                input: {
-                  $concat: [
-                    { $toString: "$daysCredited" },
-                    " days credited",
-                    {
-                      $cond: [
-                        { $gt: ["$daysEncashed", 0] },
-                        {
-                          $concat: [
-                            " | ",
-                            { $toString: "$daysEncashed" },
-                            " days encashed",
-                          ],
-                        },
-                        "",
-                      ],
-                    },
-                    {
-                      $cond: [
-                        { $gt: ["$daysExpired", 0] },
-                        {
-                          $concat: [
-                            " | ",
-                            { $toString: "$daysExpired" },
-                            " days expired",
-                          ],
-                        },
-                        "",
-                      ],
-                    },
-                    {
-                      $cond: [
-                        { $gt: ["$daysCarriedForward", 0] },
-                        {
-                          $concat: [
-                            " | ",
-                            { $toString: "$daysCarriedForward" },
-                            " days carry forward",
-                          ],
-                        },
-                        "",
-                      ],
-                    },
-                  ],
-                },
-              },
-            },
-
-            // transaction summary
-            transactionSummary: {
-              totalCredits: "$daysCredited",
-              totalEncashed: "$daysEncashed",
-              totalExpired: "$daysExpired",
-              totalCarriedForward: "$daysCarriedForward",
-              totalTaken: "$daysTaken",
-              netBalance: "$currentBalance",
-            },
-
-            // breakdown
-            transactionTypeBreakdown: {
-              notApplicable: "$notApplicable",
-              accrual: "$accrual",
-              creditedReset: "$creditedReset",
-              leaveAttached: "$leaveAttached",
-              policyStart: "$policyStart",
-              carryForwardExpiry: "$carryForwardExpiry",
-              leaveBooked: "$leaveBooked",
-              leaveCancelled: "$leaveCancelled",
-              leaveBalanceReset: "$leaveBalanceReset",
-            },
-          },
-        },
-        { $sort: { leaveTypeName: 1 } },
+            EmployeeLeaveTypeId: "$_id",
+            LeaveTypeName: "$leaveTypeName",
+            PayType: "$leaveMap.PayType",
+            LeaveEntitlementType: "$leaveMap.LeaveEntitlementType",
+            currentBalance: { $subtract: ["$totalCredit", "$totalDebit"] },
+            transactionCounts: 1,
+            _id: 0
+          }
+        }
       ];
 
-      const result = await db
-        .collection("EmployeeLeaveLedgerCollection")
+
+      const leaveTypes = await db.collection("EmployeeLeaveLedgerCollection")
         .aggregate(aggregationPipeline)
         .toArray();
-      console.log("Leave Balance Aggregation Result:", result);
 
-      const leaveTypesWithBase64 = result.map((r: any) => ({
-        ...r,
-        leaveTypeId: r.leaveTypeId
-          ? Buffer.from(r.leaveTypeId.buffer).toString("base64")
+      // 3. Map transactionCounts with CreditOrDebit dynamically
+      const employeeLeaveTypes = leaveTypes.map((lt: any) => ({
+        ...lt,
+        EmployeeLeaveTypeId: lt.EmployeeLeaveTypeId
+          ? Buffer.from(lt.EmployeeLeaveTypeId.buffer).toString("base64")
           : null,
+        transactionCounts: lt.transactionCounts.map((tx: any) => ({
+          ...tx,
+          CreditOrDebit:
+            tx.transactionType === TransactionType.Accrual ||
+              tx.transactionType === TransactionType.CreditedReset
+              ? "Credit"
+              : tx.leaveUsed > 0
+                ? "Debit"
+                : "Credit",
+          leaveAdded: tx.leaveAdded.toString(),
+          leaveUsed: tx.leaveUsed.toString(),
+        })),
       }));
 
       return {
-        employeeId: args.employeeIdBase64,
-        employeeLeaveTypes: leaveTypesWithBase64,
+        EmployeeId: employee._id.toString(),
+        EmployeeName: employee.EmployeeName,
+        EmployeeCode: employee.EmployeeCode,
+        LeaveBalanceAsOn: today.toISOString().split("T")[0],
+        employeeLeaveTypes
       };
     },
     // Get My Pending Applications
