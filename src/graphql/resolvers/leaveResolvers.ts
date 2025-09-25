@@ -59,159 +59,172 @@ export const resolvers = {
       }));
     },
     // Get Leave Balance
-    getLeaveBalance: async (
-      _parent: any,
-      args: {
-        tenantIdBase64: string;
-        companyIdBase64: string;
-        employeeIdBase64: string;
-      }
-    ) => {
-      await connectDB(LEAVE_DB_NAME);
-      const db = getDb(LEAVE_DB_NAME);
+ getLeaveBalance: async (
+  _parent: any,
+  args: {
+    tenantIdBase64: string;
+    companyIdBase64: string;
+    employeeIdBase64: string;
+    EmployeeLeaveTypeIdBase64?: string;
+  }
+) => {
+  await connectDB(LEAVE_DB_NAME);
+  const db = getDb(LEAVE_DB_NAME);
 
-      const today = new Date();
+  const today = new Date();
 
-      // 1. Fetch employee details
-      const employee = await db.collection("EmployeeLeaveMapCollection").findOne({
+  // 1. Fetch employee details
+  const employee = await db.collection("EmployeeLeaveMapCollection").findOne({
+    TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
+    CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+    EmployeeCode: args.employeeIdBase64,
+    IsDeleted: false,
+  });
+
+  if (!employee) throw new Error("Employee not found");
+
+  // Convert EmployeeLeaveTypeId if passed
+  let leaveTypeFilter: any = {};
+  if (args.EmployeeLeaveTypeIdBase64) {
+    leaveTypeFilter = {
+      "LeaveTypeId": new Binary(
+        Buffer.from(args.EmployeeLeaveTypeIdBase64, "base64"),
+        3
+      )
+    };
+  }
+
+  // 2. Aggregate leave transactions per leave type
+  const aggregationPipeline: any[] = [
+    {
+      $match: {
         TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
         CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
         EmployeeCode: args.employeeIdBase64,
         IsDeleted: false,
-      });
-
-      if (!employee) throw new Error("Employee not found");
-
-      // 2. Aggregate leave transactions per leave type
-      const aggregationPipeline = [
-        {
-          $match: {
-            TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-            CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-            EmployeeCode: args.employeeIdBase64,
-            IsDeleted: false,
+        ...leaveTypeFilter
+      }
+    },
+    { $unwind: "$LeaveLedgers" },
+    { $match: { "LeaveLedgers.Date": { $lte: today } } },
+    {
+      $addFields: {
+        leaveAddedNum: { $toDouble: { $ifNull: ["$LeaveLedgers.LeaveAdded", 0] } },
+        leaveUsedNum: { $toDouble: { $ifNull: ["$LeaveLedgers.LeaveUsed", 0] } },
+        unitOfLeave: { $toInt: { $ifNull: ["$LeaveLedgers.UnitOfLeave", 1] } },
+      }
+    },
+    {
+      $group: {
+        _id: { leaveTypeId: "$LeaveTypeId", transactionType: "$LeaveLedgers.TransactionType" },
+        leaveTypeName: { $first: "$LeaveTypeName" },
+        totalAdded: { $sum: "$leaveAddedNum" },
+        totalUsed: { $sum: "$leaveUsedNum" },
+        unitOfLeave: { $first: "$unitOfLeave" },
+      }
+    },
+    {
+      $group: {
+        _id: "$_id.leaveTypeId",
+        leaveTypeName: { $first: "$leaveTypeName" },
+        transactionCounts: {
+          $push: {
+            transactionType: "$_id.transactionType",
+            leaveAdded: "$totalAdded",
+            leaveUsed: "$totalUsed",
+            unitOfLeave: "$unitOfLeave",
           }
         },
-        { $unwind: "$LeaveLedgers" },
-        { $match: { "LeaveLedgers.Date": { $lte: today } } },
-        {
-          $addFields: {
-            leaveAddedNum: { $toDouble: { $ifNull: ["$LeaveLedgers.LeaveAdded", 0] } },
-            leaveUsedNum: { $toDouble: { $ifNull: ["$LeaveLedgers.LeaveUsed", 0] } },
-            unitOfLeave: { $toInt: { $ifNull: ["$LeaveLedgers.UnitOfLeave", 1] } },
+        totalCredit: {
+          $sum: {
+            $cond: [
+              { $in: ["$_id.transactionType", [TransactionType.Accrual, TransactionType.CreditedReset]] },
+              "$totalAdded",
+              0
+            ]
           }
         },
-        {
-          $group: {
-            _id: { leaveTypeId: "$LeaveTypeId", transactionType: "$LeaveLedgers.TransactionType" },
-            leaveTypeName: { $first: "$LeaveTypeName" },
-            totalAdded: { $sum: "$leaveAddedNum" },
-            totalUsed: { $sum: "$leaveUsedNum" },
-            unitOfLeave: { $first: "$unitOfLeave" },
-          }
-        },
-        {
-          $group: {
-            _id: "$_id.leaveTypeId",
-            leaveTypeName: { $first: "$leaveTypeName" },
-            transactionCounts: {
-              $push: {
-                transactionType: "$_id.transactionType",
-                leaveAdded: "$totalAdded",
-                leaveUsed: "$totalUsed",
-                unitOfLeave: "$unitOfLeave",
-              }
-            },
-            totalCredit: {
-              $sum: {
-                $cond: [
-                  { $in: ["$_id.transactionType", [TransactionType.Accrual, TransactionType.CreditedReset]] },
-                  "$totalAdded",
-                  0
-                ]
-              }
-            },
-            totalDebit: {
-              $sum: {
-                $cond: [
-                  { $not: { $in: ["$_id.transactionType", [TransactionType.Accrual, TransactionType.CreditedReset]] } },
-                  "$totalUsed",
-                  0
-                ]
-              }
-            }
-          }
-        },
-        // Lookup PayType and LeaveEntitlementType from EmployeeLeaveMapCollection
-        {
-          $lookup: {
-            from: "EmployeeLeaveMapCollection",
-            let: { leaveTypeId: "$_id" },
-            pipeline: [
-              {
-                $match: {
-                  TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-                  CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-                  EmployeeCode: args.employeeIdBase64,
-                  IsDeleted: false
-                }
-              },
-              { $unwind: "$EmployeeLeaveTypes" },
-              { $match: { $expr: { $eq: ["$EmployeeLeaveTypes.LeaveTypeId", "$$leaveTypeId"] } } },
-              { $project: { PayType: "$EmployeeLeaveTypes.PayType", LeaveEntitlementType: "$EmployeeLeaveTypes.LeaveEntitlementType", _id: 0 } }
-            ],
-            as: "leaveMap"
-          }
-        },
-        {
-          $unwind: { path: "$leaveMap", preserveNullAndEmptyArrays: true }
-        },
-        {
-          $project: {
-            EmployeeLeaveTypeId: "$_id",
-            LeaveTypeName: "$leaveTypeName",
-            PayType: "$leaveMap.PayType",
-            LeaveEntitlementType: "$leaveMap.LeaveEntitlementType",
-            currentBalance: { $subtract: ["$totalCredit", "$totalDebit"] },
-            transactionCounts: 1,
-            _id: 0
+        totalDebit: {
+          $sum: {
+            $cond: [
+              { $not: { $in: ["$_id.transactionType", [TransactionType.Accrual, TransactionType.CreditedReset]] } },
+              "$totalUsed",
+              0
+            ]
           }
         }
-      ];
-
-
-      const leaveTypes = await db.collection("EmployeeLeaveLedgerCollection")
-        .aggregate(aggregationPipeline)
-        .toArray();
-
-      // 3. Map transactionCounts with CreditOrDebit dynamically
-      const employeeLeaveTypes = leaveTypes.map((lt: any) => ({
-        ...lt,
-        EmployeeLeaveTypeId: lt.EmployeeLeaveTypeId
-          ? Buffer.from(lt.EmployeeLeaveTypeId.buffer).toString("base64")
-          : null,
-        transactionCounts: lt.transactionCounts.map((tx: any) => ({
-          ...tx,
-          CreditOrDebit:
-            tx.transactionType === TransactionType.Accrual ||
-              tx.transactionType === TransactionType.CreditedReset
-              ? "Credit"
-              : tx.leaveUsed > 0
-                ? "Debit"
-                : "Credit",
-          leaveAdded: tx.leaveAdded.toString(),
-          leaveUsed: tx.leaveUsed.toString(),
-        })),
-      }));
-
-      return {
-        EmployeeId: employee._id.toString(),
-        EmployeeName: employee.EmployeeName,
-        EmployeeCode: employee.EmployeeCode,
-        LeaveBalanceAsOn: today.toISOString().split("T")[0],
-        employeeLeaveTypes
-      };
+      }
     },
+    // Lookup PayType and LeaveEntitlementType from EmployeeLeaveMapCollection
+    {
+      $lookup: {
+        from: "EmployeeLeaveMapCollection",
+        let: { leaveTypeId: "$_id" },
+        pipeline: [
+          {
+            $match: {
+              TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
+              CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+              EmployeeCode: args.employeeIdBase64,
+              IsDeleted: false
+            }
+          },
+          { $unwind: "$EmployeeLeaveTypes" },
+          { $match: { $expr: { $eq: ["$EmployeeLeaveTypes.LeaveTypeId", "$$leaveTypeId"] } } },
+          { $project: { PayType: "$EmployeeLeaveTypes.PayType", LeaveEntitlementType: "$EmployeeLeaveTypes.LeaveEntitlementType", _id: 0 } }
+        ],
+        as: "leaveMap"
+      }
+    },
+    {
+      $unwind: { path: "$leaveMap", preserveNullAndEmptyArrays: true }
+    },
+    {
+      $project: {
+        EmployeeLeaveTypeId: "$_id",
+        LeaveTypeName: "$leaveTypeName",
+        PayType: "$leaveMap.PayType",
+        LeaveEntitlementType: "$leaveMap.LeaveEntitlementType",
+        currentBalance: { $subtract: ["$totalCredit", "$totalDebit"] },
+        transactionCounts: 1,
+        _id: 0
+      }
+    }
+  ];
+
+  const leaveTypes = await db.collection("EmployeeLeaveLedgerCollection")
+    .aggregate(aggregationPipeline)
+    .toArray();
+
+  // 3. Map transactionCounts with CreditOrDebit dynamically
+  const employeeLeaveTypes = leaveTypes.map((lt: any) => ({
+    ...lt,
+    EmployeeLeaveTypeId: lt.EmployeeLeaveTypeId
+      ? Buffer.from(lt.EmployeeLeaveTypeId.buffer).toString("base64")
+      : null,
+    transactionCounts: lt.transactionCounts.map((tx: any) => ({
+      ...tx,
+      CreditOrDebit:
+        tx.transactionType === TransactionType.Accrual ||
+          tx.transactionType === TransactionType.CreditedReset
+          ? "Credit"
+          : tx.leaveUsed > 0
+            ? "Debit"
+            : "Credit",
+      leaveAdded: tx.leaveAdded.toString(),
+      leaveUsed: tx.leaveUsed.toString(),
+    })),
+  }));
+
+  return {
+    EmployeeId: employee._id.toString(),
+    EmployeeName: employee.EmployeeName,
+    EmployeeCode: employee.EmployeeCode,
+    LeaveBalanceAsOn: today.toISOString().split("T")[0],
+    employeeLeaveTypes
+  };
+},
+
     // Get My Pending Applications
     getMyPendingApplications: async (
       _parent: any,
