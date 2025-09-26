@@ -279,20 +279,20 @@ export const resolvers = {
         },
         { $unwind: { path: "$leaveMap", preserveNullAndEmptyArrays: true } },
         // Final shape
-        // {
-        //   $project: {
-        //     EmployeeLeaveTypeId: "$_id",
-        //     LeaveTypeName: "$leaveTypeName",
-        //     Year: 1,
-        //     Month: 1,
-        //     PayType: "$leaveMap.PayType",
-        //     LeaveEntitlementType: "$leaveMap.LeaveEntitlementType",
-        //     currentBalance: { $subtract: ["$totalCredit", "$totalDebit"] },
-        //     transactionCounts: 1,
-        //     leaveExpired: 1, // new field
-        //     _id: 0,
-        //   },
-        // },
+        {
+          $project: {
+            EmployeeLeaveTypeId: "$_id",
+            LeaveTypeName: "$leaveTypeName",
+            Year: 1,
+            Month: 1,
+            PayType: "$leaveMap.PayType",
+            LeaveEntitlementType: "$leaveMap.LeaveEntitlementType",
+            currentBalance: { $subtract: ["$totalCredit", "$totalDebit"] },
+            transactionCounts: 1,
+            leaveExpired: 1, // new field
+            _id: 0,
+          },
+        },
       ];
 
       const leaveTypes = await db
