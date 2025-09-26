@@ -23,8 +23,14 @@ export const resolvers = {
       const aggregationPipeline = [
         {
           $match: {
-            CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-            "Employee.EmployeeId": new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
+            CompanyId: new Binary(
+              Buffer.from(args.companyIdBase64, "base64"),
+              3
+            ),
+            "Employee.EmployeeId": new Binary(
+              Buffer.from(args.employeeIdBase64, "base64"),
+              3
+            ),
             Status: 1, // Pending
           },
         },
@@ -38,21 +44,25 @@ export const resolvers = {
             TaskName: 1,
             CreationTime: 1,
             LeavePeriod: "$ModuleData.keyValuePair.Leave Period",
-            ExpectedResumptionDate: "$ModuleData.keyValuePair.Expected Resumption Date" // Extract Leave Period
+            ExpectedResumptionDate:
+              "$ModuleData.keyValuePair.Expected Resumption Date", // Extract Leave Period
           },
         },
         { $sort: { CreationTime: -1 } },
         { $limit: 50 },
       ];
 
-      const result = await db.collection("TodoTaskApproval").aggregate(aggregationPipeline).toArray();
+      const result = await db
+        .collection("TodoTaskApproval")
+        .aggregate(aggregationPipeline)
+        .toArray();
 
       return result.map((todo: any) => ({
         _id: todo._id.toString("base64"),
         companyId: todo.CompanyId?.buffer?.toString("base64") || null,
         employeeId: todo.EmployeeId?.buffer?.toString("base64") || null,
         status: todo.Status === 1 ? "Pending" : "Completed",
-        taskName: todo.TaskName || {},  // Return the whole JSON object
+        taskName: todo.TaskName || {}, // Return the whole JSON object
         leavePeriod: todo.LeavePeriod || {},
         expectedResumptionDate: todo.ExpectedResumptionDate?.en, // Return Leave Period in English
         createdAt: todo.CreationTime ? todo.CreationTime.toISOString() : null,
@@ -70,16 +80,17 @@ export const resolvers = {
     ) => {
       await connectDB(LEAVE_DB_NAME);
       const db = getDb(LEAVE_DB_NAME);
-
       const today = new Date();
 
       // 1. Fetch employee details
-      const employee = await db.collection("EmployeeLeaveMapCollection").findOne({
-        TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-        CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-        EmployeeCode: args.employeeIdBase64,
-        IsDeleted: false,
-      });
+      const employee = await db
+        .collection("EmployeeLeaveMapCollection")
+        .findOne({
+          TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
+          CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+          EmployeeCode: args.employeeIdBase64,
+          IsDeleted: false,
+        });
 
       if (!employee) throw new Error("Employee not found");
 
@@ -87,10 +98,10 @@ export const resolvers = {
       let leaveTypeFilter: any = {};
       if (args.EmployeeLeaveTypeIdBase64) {
         leaveTypeFilter = {
-          "LeaveTypeId": new Binary(
+          LeaveTypeId: new Binary(
             Buffer.from(args.EmployeeLeaveTypeIdBase64, "base64"),
             3
-          )
+          ),
         };
       }
 
@@ -99,33 +110,69 @@ export const resolvers = {
         {
           $match: {
             TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-            CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+            CompanyId: new Binary(
+              Buffer.from(args.companyIdBase64, "base64"),
+              3
+            ),
             EmployeeCode: args.employeeIdBase64,
             IsDeleted: false,
-            ...leaveTypeFilter
-          }
+            ...leaveTypeFilter,
+          },
         },
         { $unwind: "$LeaveLedgers" },
-        { $match: { "LeaveLedgers.Date": { $lte: today } } },
+        {
+          $match: {
+            "LeaveLedgers.Date": { $lte: today },
+            "LeaveLedgers.TransactionType": { $nin: [3, 4, 9, 10] }, // keep type 2 for leaveExpired
+          },
+        },
+        // Extract year + month
         {
           $addFields: {
-            leaveAddedNum: { $toDouble: { $ifNull: ["$LeaveLedgers.LeaveAdded", 0] } },
-            leaveUsedNum: { $toDouble: { $ifNull: ["$LeaveLedgers.LeaveUsed", 0] } },
-            unitOfLeave: { $toInt: { $ifNull: ["$LeaveLedgers.UnitOfLeave", 1] } },
-          }
+            leaveAddedNum: {
+              $toDouble: { $ifNull: ["$LeaveLedgers.LeaveAdded", 0] },
+            },
+            leaveUsedNum: {
+              $toDouble: { $ifNull: ["$LeaveLedgers.LeaveUsed", 0] },
+            },
+            unitOfLeave: {
+              $toInt: { $ifNull: ["$LeaveLedgers.UnitOfLeave", 1] },
+            },
+            year: { $year: "$LeaveLedgers.Date" },
+            month: { $month: "$LeaveLedgers.Date" },
+            leaveExpiredNum: {
+              $cond: [
+                { $eq: ["$LeaveLedgers.TransactionType", 2] },
+                "$LeaveLedgers.LeaveUsed",
+                0,
+              ],
+            },
+          },
         },
+        // Group by leaveType + month + transactionType
         {
           $group: {
-            _id: { leaveTypeId: "$LeaveTypeId", transactionType: "$LeaveLedgers.TransactionType" },
+            _id: {
+              leaveTypeId: "$LeaveTypeId",
+              year: "$year",
+              month: "$month",
+              transactionType: "$LeaveLedgers.TransactionType",
+            },
             leaveTypeName: { $first: "$LeaveTypeName" },
             totalAdded: { $sum: "$leaveAddedNum" },
             totalUsed: { $sum: "$leaveUsedNum" },
             unitOfLeave: { $first: "$unitOfLeave" },
-          }
+            leaveExpiredNum: { $sum: "$leaveExpiredNum" },
+          },
         },
+        // Group again by leaveType + month
         {
           $group: {
-            _id: "$_id.leaveTypeId",
+            _id: {
+              leaveTypeId: "$_id.leaveTypeId",
+              year: "$_id.year",
+              month: "$_id.month",
+            },
             leaveTypeName: { $first: "$leaveTypeName" },
             transactionCounts: {
               $push: {
@@ -133,29 +180,64 @@ export const resolvers = {
                 leaveAdded: "$totalAdded",
                 leaveUsed: "$totalUsed",
                 unitOfLeave: "$unitOfLeave",
-              }
+              },
             },
             totalCredit: {
               $sum: {
                 $cond: [
-                  { $in: ["$_id.transactionType", [TransactionType.Accrual, TransactionType.CreditedReset]] },
+                  {
+                    $in: [
+                      "$_id.transactionType",
+                      [TransactionType.Accrual, TransactionType.Reset],
+                    ],
+                  },
                   "$totalAdded",
-                  0
-                ]
-              }
+                  0,
+                ],
+              },
             },
             totalDebit: {
               $sum: {
                 $cond: [
-                  { $not: { $in: ["$_id.transactionType", [TransactionType.Accrual, TransactionType.CreditedReset]] } },
+                  {
+                    $not: {
+                      $in: [
+                        "$_id.transactionType",
+                        [TransactionType.Accrual, TransactionType.Reset],
+                      ],
+                    },
+                  },
                   "$totalUsed",
-                  0
-                ]
-              }
-            }
-          }
+                  0,
+                ],
+              },
+            },
+            leaveExpired: { $sum: "$leaveExpiredNum" }, // year-wise leave expired
+          },
         },
-        // Lookup PayType and LeaveEntitlementType from EmployeeLeaveMapCollection
+        // Sort by year + month (latest first)
+        { $sort: { "_id.year": -1, "_id.month": -1 } },
+        {
+          $match: {
+            $expr: {
+              $eq: ["$_id.year", today.getFullYear()],
+            },
+          },
+        },
+        // Keep only the latest month per leaveType
+        {
+          $group: {
+            _id: "$_id.leaveTypeId",
+            leaveTypeName: { $first: "$leaveTypeName" },
+            Year: { $first: "$_id.year" },
+            Month: { $first: "$_id.month" },
+            transactionCounts: { $first: "$transactionCounts" },
+            totalCredit: { $first: "$totalCredit" },
+            totalDebit: { $first: "$totalDebit" },
+            leaveExpired: { $first: "$leaveExpired" },
+          },
+        },
+        // Lookup PayType + LeaveEntitlementType
         {
           $lookup: {
             from: "EmployeeLeaveMapCollection",
@@ -163,40 +245,62 @@ export const resolvers = {
             pipeline: [
               {
                 $match: {
-                  TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-                  CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+                  TenantId: new Binary(
+                    Buffer.from(args.tenantIdBase64, "base64"),
+                    3
+                  ),
+                  CompanyId: new Binary(
+                    Buffer.from(args.companyIdBase64, "base64"),
+                    3
+                  ),
                   EmployeeCode: args.employeeIdBase64,
-                  IsDeleted: false
-                }
+                  IsDeleted: false,
+                },
               },
               { $unwind: "$EmployeeLeaveTypes" },
-              { $match: { $expr: { $eq: ["$EmployeeLeaveTypes.LeaveTypeId", "$$leaveTypeId"] } } },
-              { $project: { PayType: "$EmployeeLeaveTypes.PayType", LeaveEntitlementType: "$EmployeeLeaveTypes.LeaveEntitlementType", _id: 0 } }
+              {
+                $match: {
+                  $expr: {
+                    $eq: ["$EmployeeLeaveTypes.LeaveTypeId", "$$leaveTypeId"],
+                  },
+                },
+              },
+              {
+                $project: {
+                  PayType: "$EmployeeLeaveTypes.PayType",
+                  LeaveEntitlementType:
+                    "$EmployeeLeaveTypes.LeaveEntitlementType",
+                  _id: 0,
+                },
+              },
             ],
-            as: "leaveMap"
-          }
+            as: "leaveMap",
+          },
         },
-        {
-          $unwind: { path: "$leaveMap", preserveNullAndEmptyArrays: true }
-        },
-        {
-          $project: {
-            EmployeeLeaveTypeId: "$_id",
-            LeaveTypeName: "$leaveTypeName",
-            PayType: "$leaveMap.PayType",
-            LeaveEntitlementType: "$leaveMap.LeaveEntitlementType",
-            currentBalance: { $subtract: ["$totalCredit", "$totalDebit"] },
-            transactionCounts: 1,
-            _id: 0
-          }
-        }
+        { $unwind: { path: "$leaveMap", preserveNullAndEmptyArrays: true } },
+        // Final shape
+        // {
+        //   $project: {
+        //     EmployeeLeaveTypeId: "$_id",
+        //     LeaveTypeName: "$leaveTypeName",
+        //     Year: 1,
+        //     Month: 1,
+        //     PayType: "$leaveMap.PayType",
+        //     LeaveEntitlementType: "$leaveMap.LeaveEntitlementType",
+        //     currentBalance: { $subtract: ["$totalCredit", "$totalDebit"] },
+        //     transactionCounts: 1,
+        //     leaveExpired: 1, // new field
+        //     _id: 0,
+        //   },
+        // },
       ];
 
-      const leaveTypes = await db.collection("EmployeeLeaveLedgerCollection")
+      const leaveTypes = await db
+        .collection("EmployeeLeaveLedgerCollection")
         .aggregate(aggregationPipeline)
         .toArray();
-
-      // 3. Map transactionCounts with CreditOrDebit dynamically
+      console.log("Leave Types Raw:", leaveTypes);
+      // Map transactionCounts with CreditOrDebit dynamically
       const employeeLeaveTypes = leaveTypes.map((lt: any) => ({
         ...lt,
         EmployeeLeaveTypeId: lt.EmployeeLeaveTypeId
@@ -206,36 +310,50 @@ export const resolvers = {
           ...tx,
           CreditOrDebit:
             tx.transactionType === TransactionType.Accrual ||
-              tx.transactionType === TransactionType.CreditedReset
+            tx.transactionType === TransactionType.Reset
               ? "Credit"
               : tx.leaveUsed > 0
-                ? "Debit"
-                : "Credit",
+              ? "Debit"
+              : "Credit",
           leaveAdded: tx.leaveAdded.toString(),
           leaveUsed: tx.leaveUsed.toString(),
+          LeaveExpired:
+            tx.transactionType === 2 // Reset type
+              ? tx.leaveUsed.toString()
+              : "0",
         })),
       }));
-
+      // console.log("Employee Leave Types:", employeeLeaveTypes);
       return {
         EmployeeId: employee._id.toString(),
         EmployeeName: employee.EmployeeName,
         EmployeeCode: employee.EmployeeCode,
         LeaveBalanceAsOn: today.toISOString().split("T")[0],
-        employeeLeaveTypes
+        employeeLeaveTypes,
       };
     },
 
     // Get My Pending Applications
     getMyPendingApplications: async (
       _parent: any,
-      args: { companyIdBase64: string; employeeIdBase64: string; isPending: boolean }
+      args: {
+        companyIdBase64: string;
+        employeeIdBase64: string;
+        isPending: boolean;
+      }
     ) => {
       await connectDB(TASK_DB_NAME);
       const db = getDb(TASK_DB_NAME);
 
       // Convert inputs properly
-      const companyId = new Binary(Buffer.from(args.companyIdBase64, "base64"), 3);
-      const employeeId = new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3);
+      const companyId = new Binary(
+        Buffer.from(args.companyIdBase64, "base64"),
+        3
+      );
+      const employeeId = new Binary(
+        Buffer.from(args.employeeIdBase64, "base64"),
+        3
+      );
 
       // Build match
       const matchStage: any = {
@@ -256,7 +374,9 @@ export const resolvers = {
             CompanyId: 1,
             EmployeeId: "$Employee.EmployeeId",
             ApprovalStatus: 1,
-            TaskName: { $ifNull: ["$TaskDefinition.TaskName", "$ModuleData.TaskName"] },
+            TaskName: {
+              $ifNull: ["$TaskDefinition.TaskName", "$ModuleData.TaskName"],
+            },
             TaskModule: "$TaskModule.Name",
             CreationTime: 1,
             TotalApprovalStages: 1,
@@ -283,20 +403,24 @@ export const resolvers = {
         companyId: doc.CompanyId?.buffer?.toString("base64") || null,
         employeeId: doc.EmployeeId?.buffer?.toString("base64") || null,
         status:
-          doc.ApprovalStatus === 1 || doc.ApprovalStatus === "1" || doc.ApprovalStatus === "Pending"
+          doc.ApprovalStatus === 1 ||
+          doc.ApprovalStatus === "1" ||
+          doc.ApprovalStatus === "Pending"
             ? "Pending"
             : doc.ApprovalStatus === 2 || doc.ApprovalStatus === "2"
-              ? "Approved"
-              : doc.ApprovalStatus === 3 || doc.ApprovalStatus === "3"
-                ? "Rejected"
-                : "Unknown",
+            ? "Approved"
+            : doc.ApprovalStatus === 3 || doc.ApprovalStatus === "3"
+            ? "Rejected"
+            : "Unknown",
         TaskName: doc.TaskName || {},
         taskModule: doc.TaskModule || null,
         totalApprovalStages: doc.TotalApprovalStages || null,
         leaveType: doc.LeaveType || {},
         leavePeriod: doc.LeavePeriod || {},
         resumptionDate: doc.ResumptionDate || {},
-        createdAt: doc.CreationTime ? new Date(doc.CreationTime).toISOString() : null,
+        createdAt: doc.CreationTime
+          ? new Date(doc.CreationTime).toISOString()
+          : null,
       }));
     },
     // Get Leave Application History
@@ -369,9 +493,11 @@ export const resolvers = {
       }
 
       // Other filters
-      if (args.unitOfLeave !== undefined) matchStage.UnitOfLeave = args.unitOfLeave;
+      if (args.unitOfLeave !== undefined)
+        matchStage.UnitOfLeave = args.unitOfLeave;
       if (args.payType !== undefined) matchStage.PayType = args.payType;
-      if (args.approvalStatus) matchStage.ApprovalStatus = parseInt(args.approvalStatus, 10);
+      if (args.approvalStatus)
+        matchStage.ApprovalStatus = parseInt(args.approvalStatus, 10);
 
       // Employee placeholder IDs
       if (args.employeePlaceholderIdsBase64) {
@@ -384,7 +510,9 @@ export const resolvers = {
 
       // Leave period filter
       if (args.startDate && args.endDate) {
-        matchStage["LeavePeriod.StartDate"] = { $gte: new Date(args.startDate) };
+        matchStage["LeavePeriod.StartDate"] = {
+          $gte: new Date(args.startDate),
+        };
         matchStage["LeavePeriod.EndDate"] = { $lt: new Date(args.endDate) };
       }
 
@@ -548,14 +676,46 @@ export const resolvers = {
       }));
     },
     // Dashboard API
-    getDashboardData: async (_parent: any, args: { tenantIdBase64: string; companyIdBase64: string; employeeIdBase64: string }) => {
+    getDashboardData: async (
+      _parent: any,
+      args: {
+        tenantIdBase64: string;
+        companyIdBase64: string;
+        employeeIdBase64: string;
+      }
+    ) => {
       try {
-        const [todoList, pendingApplications, leaveBalance, applicationHistory, encashmentApplications] = await Promise.all([
-          resolvers.Query.getTodoList(_parent, { companyIdBase64: args.companyIdBase64, employeeIdBase64: args.employeeIdBase64 }),
-          resolvers.Query.getMyPendingApplications(_parent, { companyIdBase64: args.companyIdBase64, employeeIdBase64: args.employeeIdBase64, isPending: true }),
-          resolvers.Query.getLeaveBalance(_parent, { tenantIdBase64: args.tenantIdBase64, companyIdBase64: args.companyIdBase64, employeeIdBase64: args.employeeIdBase64 }),
-          resolvers.Query.getApplicationHistory(_parent, { tenantIdBase64: args.tenantIdBase64, companyIdBase64: args.companyIdBase64, employeeIdBase64: args.employeeIdBase64 }),
-          resolvers.Query.getEncashmentApplications(_parent, { tenantIdBase64: args.tenantIdBase64, companyIdBase64: args.companyIdBase64, employeeIdBase64: args.employeeIdBase64 }),
+        const [
+          todoList,
+          pendingApplications,
+          leaveBalance,
+          applicationHistory,
+          encashmentApplications,
+        ] = await Promise.all([
+          resolvers.Query.getTodoList(_parent, {
+            companyIdBase64: args.companyIdBase64,
+            employeeIdBase64: args.employeeIdBase64,
+          }),
+          resolvers.Query.getMyPendingApplications(_parent, {
+            companyIdBase64: args.companyIdBase64,
+            employeeIdBase64: args.employeeIdBase64,
+            isPending: true,
+          }),
+          resolvers.Query.getLeaveBalance(_parent, {
+            tenantIdBase64: args.tenantIdBase64,
+            companyIdBase64: args.companyIdBase64,
+            employeeIdBase64: args.employeeIdBase64,
+          }),
+          resolvers.Query.getApplicationHistory(_parent, {
+            tenantIdBase64: args.tenantIdBase64,
+            companyIdBase64: args.companyIdBase64,
+            employeeIdBase64: args.employeeIdBase64,
+          }),
+          resolvers.Query.getEncashmentApplications(_parent, {
+            tenantIdBase64: args.tenantIdBase64,
+            companyIdBase64: args.companyIdBase64,
+            employeeIdBase64: args.employeeIdBase64,
+          }),
         ]);
 
         return {
