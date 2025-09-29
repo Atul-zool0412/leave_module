@@ -35,10 +35,15 @@ export const typeDefs = gql`
     LeaveTypeName: JSON
     PayType: Int
     LeaveEntitlementType: Int
+    IsActive: Boolean
+    IsSystemDefault: Boolean
+    IsCountrySpecific: Boolean
+    CountryCode: String
+    IsCustomized: Boolean
     currentBalance: Float
     transactionCounts: [TransactionCount]
   }
-
+    
   type LeaveBalance {
     EmployeeId: ID!
     EmployeeName: JSON
@@ -114,7 +119,7 @@ export const typeDefs = gql`
       tenantIdBase64: String!
       companyIdBase64: String!
       employeeIdBase64: String!
-      EmployeeLeaveTypeIdBase64: String
+      # EmployeeLeaveTypeIdBase64: String
     ): LeaveBalance
 
     # Leave history
