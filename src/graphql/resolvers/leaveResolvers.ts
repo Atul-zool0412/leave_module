@@ -82,7 +82,7 @@ export const resolvers = {
       const today = new Date();
 
       // 1. Fetch employee details
-      const employee = await db
+      const employeeLeaveType = await db
         .collection("EmployeeLeaveMapCollection")
         .findOne({
           TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
@@ -90,9 +90,9 @@ export const resolvers = {
           EmployeeCode: args.employeeIdBase64,
           IsDeleted: false,
         });
-      if (!employee) throw new Error("Employee not found");
+      if (!employeeLeaveType) throw new Error("Employee not found");
 
-      const activeLeaveTypes = employee.EmployeeLeaveTypes.filter(
+      const activeLeaveTypes = employeeLeaveType.EmployeeLeaveTypes.filter(
         (leaveTypes: any) => leaveTypes.IsActive === true
       );
 
@@ -100,7 +100,7 @@ export const resolvers = {
       const aggregationPipeline: any[] = [
         {
           $match: {
-            EmployeeCode: employee.EmployeeCode,
+            EmployeeCode: employeeLeaveType.EmployeeCode,
             IsDeleted: false,
             EmployeeLeaveTypeId: { $in: activeLeaveTypes.map((elt: any) => elt._id) }
           },
@@ -219,15 +219,14 @@ export const resolvers = {
                 $match: {
                   TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
                   CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-                  EmployeeCode: args.employeeIdBase64,
-                  IsDeleted: false,
-                },
+                  EmployeeCode: args.employeeIdBase64
+                }
               },
               { $unwind: "$EmployeeLeaveTypes" },
               {
                 $match: {
-                  $expr: { $eq: ["$EmployeeLeaveTypes.LeaveTypeId", "$$leaveTypeId"] },
-                },
+                  $expr: { $eq: ["$EmployeeLeaveTypes.LeaveTypeId", "$$leaveTypeId"] }
+                }
               },
               {
                 $project: {
@@ -238,19 +237,23 @@ export const resolvers = {
                   IsCountrySpecific: "$EmployeeLeaveTypes.IsCountrySpecific",
                   CountryCode: "$EmployeeLeaveTypes.CountryCode",
                   IsCustomized: "$EmployeeLeaveTypes.IsCustomized",
-                  _id: 0,
-                },
-              },
+                  LeaveTypeName: "$EmployeeLeaveTypes.LeaveTypeName",
+                  _id: 0
+                }
+              }
             ],
-            as: "leaveMap",
-          },
+            as: "leaveMap"
+          }
         },
         { $unwind: { path: "$leaveMap", preserveNullAndEmptyArrays: true } },
         // Final shape
         {
           $project: {
             EmployeeLeaveTypeId: "$_id",
-            LeaveTypeName: "$leaveTypeName.en",
+            LeaveTypeName: {
+              en: "$leaveTypeName.en.Name",
+              ar: "$leaveTypeName.ar.Name"
+            },
             Year: 1,
             Month: 1,
             PayType: "$leaveMap.PayType",
@@ -294,12 +297,12 @@ export const resolvers = {
       }));
 
       return {
-        EmployeeId: employee._id.toString(),
+        EmployeeId: employeeLeaveType._id.toString(),
         EmployeeName: {
-          en: employee.EmployeeName.en.FullName,
-          ar: employee.EmployeeName.ar.FullName,
+          en: employeeLeaveType.EmployeeName.en.FullName,
+          ar: employeeLeaveType.EmployeeName.ar.FullName,
         },
-        EmployeeCode: employee.EmployeeCode,
+        EmployeeCode: employeeLeaveType.EmployeeCode,
         LeaveBalanceAsOn: today.toISOString().split("T")[0],
         employeeLeaveTypes,
       };
