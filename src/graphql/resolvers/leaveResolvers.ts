@@ -4,6 +4,7 @@ import { Binary } from "mongodb";
 import GraphQLJSON from "graphql-type-json";
 import connectDB, { getDb } from "../../config/db";
 import { TransactionType } from "../../enum/TransactionType";
+import { TodoStatus } from "../../enum/TodoStatus";
 
 const LEAVE_DB_NAME = process.env.LEAVE_DB_NAME || "LeaveSvcNET8test";
 const TASK_DB_NAME = process.env.TASK_DB_NAME || "TaskMgmtSvcNET8test";
@@ -15,41 +16,49 @@ export const resolvers = {
     // Get Todo List
     getTodoList: async (
       _parent: any,
-      args: { companyIdBase64: string; employeeIdBase64: string }
+      args: {
+        tenantIdBase64: string;
+        companyIdBase64: string;
+        employeeIdBase64: string;
+        status?: number; // numeric status
+      }
     ) => {
       await connectDB(TASK_DB_NAME);
       const db = getDb(TASK_DB_NAME);
 
+      const matchStage: any = {
+        TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
+        CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+        "Employee.EmployeeId": new Binary(
+          Buffer.from(args.employeeIdBase64, "base64"),
+          3
+        ),
+        IsDeleted: false,
+        Status: TodoStatus.Pending // default status if not provided
+      };
+
       const aggregationPipeline = [
+        { $match: matchStage },
+
+        // Convert Assigned on string to Date for sorting
         {
-          $match: {
-            CompanyId: new Binary(
-              Buffer.from(args.companyIdBase64, "base64"),
-              3
-            ),
-            "Employee.EmployeeId": new Binary(
-              Buffer.from(args.employeeIdBase64, "base64"),
-              3
-            ),
-            Status: 1, // Pending
-          },
+          $addFields: {
+            assignedOnDate: {
+              $dateFromString: {
+                dateString: "$ModuleData.keyValuePair['Assigned on'].en",
+                format: "%d %b %Y",
+                onError: null,
+                onNull: null
+              }
+            }
+          }
         },
-        { $unwind: { path: "$ModuleData", preserveNullAndEmptyArrays: true } },
+
         {
-          $project: {
-            _id: 1,
-            CompanyId: 1,
-            EmployeeId: "$Employee.EmployeeId",
-            Status: 1,
-            TaskName: 1,
-            CreationTime: 1,
-            LeavePeriod: "$ModuleData.keyValuePair.Leave Period",
-            ExpectedResumptionDate:
-              "$ModuleData.keyValuePair.Expected Resumption Date", // Extract Leave Period
-          },
+          $sort: { assignedOnDate: -1 }
         },
-        { $sort: { CreationTime: -1 } },
-        { $limit: 50 },
+
+        { $limit: 50 }
       ];
 
       const result = await db
@@ -57,17 +66,57 @@ export const resolvers = {
         .aggregate(aggregationPipeline)
         .toArray();
 
-      return result.map((todo: any) => ({
-        _id: todo._id.toString("base64"),
-        companyId: todo.CompanyId?.buffer?.toString("base64") || null,
-        employeeId: todo.EmployeeId?.buffer?.toString("base64") || null,
-        status: todo.Status === 1 ? "Pending" : "Completed",
-        taskName: todo.TaskName || {}, // Return the whole JSON object
-        leavePeriod: todo.LeavePeriod || {},
-        expectedResumptionDate: todo.ExpectedResumptionDate?.en, // Return Leave Period in English
-        createdAt: todo.CreationTime ? todo.CreationTime.toISOString() : null,
+      // Map DB result to desired GraphQL response
+      const items = result.map((todo: any) => ({
+        createdBy: todo.CreatedBy
+          ? {
+            type: "user",
+            loginId: todo.CreatedBy?.LoginId || null,
+            loginName: todo.CreatedBy?.LoginName || null,
+            isEmployee: todo.CreatedBy?.IsEmployee ?? true,
+            employee: {
+              en: todo.CreatedBy?.IsEmployee
+                ? todo.CreatedBy?.Name?.en?.FullName || ""
+                : "",
+              ar: todo.CreatedBy?.IsEmployee
+                ? todo.CreatedBy?.Name?.ar?.FullName || ""
+                : ""
+            }
+          }
+          : null,
+
+        assignedTo: todo.AssignedTo
+          ? {
+            loginId: todo.AssignedTo?.LoginId || null,
+            loginName: todo.AssignedTo?.LoginName || null,
+            isEmployee: todo.AssignedTo?.IsEmployee ?? true,
+            employee: {
+              en: todo.AssignedTo?.Name?.en?.FullName || "",
+              ar: todo.AssignedTo?.Name?.ar?.FullName || ""
+            }
+          }
+          : null,
+
+        todoType: todo.TodoType,
+        recordSource: todo.RecordSource,
+        appService: todo.TaskDefinition?.TaskModule?.AppService || null,
+        moduleData: todo.ModuleData,
+        isEmployeeSpecificTodo: todo.IsEmployeeSpecificTodo,
+        employeeId: todo.Employee?.EmployeeId || null,
+        EmployeeName: todo.Employee?.Name || null,
+        externalId: todo.Externald || null,
+        formUrl: todo.FormUrl,
+        status: todo.Status,
+        priority: todo.Priority
       }));
+
+      return {
+        items,
+        totalCount: items.length
+      };
     },
+
+
     // Get Leave Balance
     getLeaveBalance: async (
       _parent: any,
@@ -79,7 +128,9 @@ export const resolvers = {
     ) => {
       await connectDB(LEAVE_DB_NAME);
       const db = getDb(LEAVE_DB_NAME);
-      const today = new Date();
+      // const today = new Date();
+      const today = new Date("2025-10-19T04:55:52.156Z");
+      // console.log(today);
 
       // 1. Fetch employee details
       const employeeLeaveType = await db
@@ -274,12 +325,13 @@ export const resolvers = {
         .collection("EmployeeLeaveLedgerCollection")
         .aggregate(aggregationPipeline)
         .toArray();
-      console.log("leaveTypes:", leaveTypes);
+
+      // console.log("leaveTypes:", leaveTypes);
       // Map transactionCounts with CreditOrDebit dynamically
       const employeeLeaveTypes = leaveTypes.map((lt: any) => ({
         ...lt,
         EmployeeLeaveTypeId: lt.EmployeeLeaveTypeId
-          ? Buffer.from(lt.EmployeeLeaveTypeId.buffer).toString("base64")
+          ? Buffer.from(lt.EmployeeLeaveTypeId.buffer).toString()
           : null,
         transactionCounts: lt.transactionCounts.map((tx: any) => ({
           ...tx,
@@ -312,92 +364,100 @@ export const resolvers = {
     getMyPendingApplications: async (
       _parent: any,
       args: {
+        tenantIdBase64: string;
         companyIdBase64: string;
         employeeIdBase64: string;
-        isPending: boolean;
       }
     ) => {
       await connectDB(TASK_DB_NAME);
       const db = getDb(TASK_DB_NAME);
 
-      // Convert inputs properly
-      const companyId = new Binary(
-        Buffer.from(args.companyIdBase64, "base64"),
-        3
-      );
-      const employeeId = new Binary(
-        Buffer.from(args.employeeIdBase64, "base64"),
-        3
-      );
-
-      // Build match
-      const matchStage: any = {
-        CompanyId: companyId,
-        "Employee.EmployeeId": employeeId,
-        $or: [{ IsDeleted: false }, { IsDeleted: { $exists: false } }],
-      };
-
-      if (args.isPending) {
-        matchStage.ApprovalStatus = { $in: [1, "1", "Pending"] };
-      }
+      const tenantId = new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3);
+      const companyId = new Binary(Buffer.from(args.companyIdBase64, "base64"), 3);
+      const employeeId = new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3);
 
       const aggregationPipeline = [
-        { $match: matchStage },
         {
-          $project: {
-            _id: 1,
-            CompanyId: 1,
-            EmployeeId: "$Employee.EmployeeId",
+          $match: {
+            TenantId: tenantId,
+            CompanyId: companyId,
+            "Employee.EmployeeId": employeeId,
+            IsApprovalForEmployee: true,
             ApprovalStatus: 1,
-            TaskName: {
-              $ifNull: ["$TaskDefinition.TaskName", "$ModuleData.TaskName"],
-            },
-            TaskModule: "$TaskModule.Name",
-            CreationTime: 1,
-            TotalApprovalStages: 1,
-            LeaveType: "$ModuleData.keyValuePair.Leave Type",
-            LeavePeriod: "$ModuleData.keyValuePair.Leave Period",
-            ResumptionDate: "$ModuleData.keyValuePair.Resumption Date",
+            $or: [{ IsDeleted: false }, { IsDeleted: { $exists: false } }],
           },
         },
         { $sort: { CreationTime: -1 } },
         { $limit: 50 },
-      ];
+        {
+          $addFields: {
+            employeeNameEn: { $ifNull: ["$Employee.Name.en.FullName", ""] },
+            employeeNameAr: { $ifNull: ["$Employee.Name.ar.FullName", ""] },
+            createdByEmployee: {
+              en: { $ifNull: ["$CreatedBy.Employee.Name.en.FullName", ""] },
+              ar: { $ifNull: ["$CreatedBy.Employee.Name.ar.FullName", ""] }
+            },
+            pendingEmployeeName: {
+              en: { $ifNull: ["$PendingAt.Employee.Name.en.FullName", ""] },
+              ar: { $ifNull: ["$PendingAt.Employee.Name.ar.FullName", ""] }
+            },
+            leaveType: { $ifNull: ["$ModuleData.keyValuePair.Leave Type.en", ""] }
+          }
 
-      // console.log("Aggregation Pipeline:", JSON.stringify(aggregationPipeline, null, 2));
+        },
+        {
+          $project: {
+            createdBy: {
+              type: "user",
+              loginId: "$CreatedBy.LoginId",
+              loginName: "$CreatedBy.LoginName",
+              isEmployee: "$CreatedBy.IsEmployee",
+              employee: "$createdByEmployee",
+            },
+            recordSource: { $ifNull: ["$RecordSource", null] },
+            appService: { $ifNull: ["$AppService", null] },
+            isApprovalForEmployee: { $ifNull: ["$IsApprovalForEmployee", null] },
+            employeeId: "$Employee.EmployeeId",
+            EmployeeName: { en: "$employeeNameEn", ar: "$employeeNameAr" },
+            EmployeeCode: "$Employee.EmployeeCode",
+            ModuleData: 1,
+            formUrl: { $ifNull: ["$FormUrl", ""] },
+            processingMode: { $ifNull: ["$ProcessingMode", null] },
+            taskApprovalStatus: "$ApprovalStatus",
+            totalApprovalStages: { $ifNull: ["$TotalApprovalStages", null] },
+            currentApprovalStage: { $ifNull: ["$PendingAt.SerialNo", null] },
+            PendingAt: {
+              LoginId: "$PendingAt.LoginId",
+              LoginName: "$PendingAt.LoginName",
+              SerialNo: "$PendingAt.SerialNo",
+              IsEmployee: "$PendingAt.IsEmployee",
+              EmployeeName: "$pendingEmployeeName",
+              EmployeeCode: "$PendingAt.Employee.EmployeeCode",
+              AssignedOn: { $ifNull: ["$PendingAt.AssignedOn", null] },
+              DueDate: { $ifNull: ["$PendingAt.DueDate", null] },
+              IsSendBackTask: { $ifNull: ["$PendingAt.IsSendBackTask", false] },
+              IsFinalApprover: { $ifNull: ["$PendingAt.IsFinalApprover", false] },
+            },
+            leaveType: 1,
+          },
+        },
+      ];
 
       const result = await db
         .collection("TaskApprovals")
         .aggregate(aggregationPipeline)
         .toArray();
+      console.log("Pending Applications:", result);
 
-      // console.log("Aggregation result:", result);
-
-      return result.map((doc: any) => ({
-        _id: doc._id?.buffer?.toString("base64") || null,
-        companyId: doc.CompanyId?.buffer?.toString("base64") || null,
-        employeeId: doc.EmployeeId?.buffer?.toString("base64") || null,
-        status:
-          doc.ApprovalStatus === 1 ||
-            doc.ApprovalStatus === "1" ||
-            doc.ApprovalStatus === "Pending"
-            ? "Pending"
-            : doc.ApprovalStatus === 2 || doc.ApprovalStatus === "2"
-              ? "Approved"
-              : doc.ApprovalStatus === 3 || doc.ApprovalStatus === "3"
-                ? "Rejected"
-                : "Unknown",
-        TaskName: doc.TaskName || {},
-        taskModule: doc.TaskModule || null,
-        totalApprovalStages: doc.TotalApprovalStages || null,
-        leaveType: doc.LeaveType || {},
-        leavePeriod: doc.LeavePeriod || {},
-        resumptionDate: doc.ResumptionDate || {},
-        createdAt: doc.CreationTime
-          ? new Date(doc.CreationTime).toISOString()
-          : null,
-      }));
+      return {
+        items: result.map((doc: any) => ({
+          ...doc,
+          SmartSummary: `Your ${doc.leaveType} application has been applied and is currently pending at ${doc.PendingAt.EmployeeName.en || ""} (${doc.PendingAt.EmployeeCode || ""})`,
+        })),
+        totalCount: result.length,
+      };
     },
+
     // Get Leave Application History
     getApplicationHistory: async (
       _parent: any,
@@ -405,17 +465,9 @@ export const resolvers = {
         tenantIdBase64: string;
         companyIdBase64: string;
         employeeIdBase64?: string;
-        employeeCode?: string; // <-- new
-        filter?: string;
+        employeeCode?: string;
         leaveTypeIdBase64?: string;
-        employeeLeaveTypeIdBase64?: string;
-        unitOfLeave?: number;
-        payType?: number;
         approvalStatus?: string;
-        employeePlaceholderIdsBase64?: string[];
-        startDate?: string;
-        endDate?: string;
-        applicationDate?: string;
         skipCount?: number;
         maxResultCount?: number;
       }
@@ -439,20 +491,7 @@ export const resolvers = {
         matchStage.EmployeeCode = args.employeeCode;
       }
 
-      // Text filter (name or code)
-      if (args.filter) {
-        matchStage["$or"] = [
-          {
-            "EmployeeName.en.FullName": {
-              $regex: `.*${args.filter}.*`,
-              $options: "i",
-            },
-          },
-          { EmployeeCode: { $regex: `^${args.filter}$`, $options: "i" } },
-        ];
-      }
 
-      // Leave type filters
       if (args.leaveTypeIdBase64) {
         matchStage.LeaveTypeId = new Binary(
           Buffer.from(args.leaveTypeIdBase64, "base64"),
@@ -460,43 +499,8 @@ export const resolvers = {
         );
       }
 
-      if (args.employeeLeaveTypeIdBase64) {
-        matchStage.EmployeeLeaveTypeId = new Binary(
-          Buffer.from(args.employeeLeaveTypeIdBase64, "base64"),
-          3
-        );
-      }
-
-      // Other filters
-      if (args.unitOfLeave !== undefined)
-        matchStage.UnitOfLeave = args.unitOfLeave;
-      if (args.payType !== undefined) matchStage.PayType = args.payType;
-      if (args.approvalStatus)
-        matchStage.ApprovalStatus = parseInt(args.approvalStatus, 10);
-
-      // Employee placeholder IDs
-      if (args.employeePlaceholderIdsBase64) {
-        matchStage.EmployeePlaceholderId = {
-          $in: args.employeePlaceholderIdsBase64.map(
-            (id) => new Binary(Buffer.from(id, "base64"), 3)
-          ),
-        };
-      }
-
-      // Leave period filter
-      if (args.startDate && args.endDate) {
-        matchStage["LeavePeriod.StartDate"] = {
-          $gte: new Date(args.startDate),
-        };
-        matchStage["LeavePeriod.EndDate"] = { $lt: new Date(args.endDate) };
-      }
-
-      // Application date filter
-      if (args.applicationDate) {
-        const start = new Date(args.applicationDate);
-        const end = new Date(args.applicationDate);
-        end.setDate(end.getDate() + 1);
-        matchStage.AppliedOn = { $gte: start, $lt: end };
+      if (args.approvalStatus) {
+        matchStage.ApprovalStatus = args.approvalStatus;
       }
 
       // ------------------ Aggregation pipeline ------------------
@@ -509,41 +513,99 @@ export const resolvers = {
             LeaveTypeName: 1,
             AppliedOn: 1,
             ApprovedOn: 1,
+            LeaveTypeShortCode: 1,
+            EmployeeId: 1,
+            EmployeeName: 1,
+            EmployeeCode: 1,
+            ThumbnailPicture: 1,
+            LeavePeriod: 1,
+            DurationApplied: 1,
+            RejoinConfRequired: 1,
+            IsRejoined: 1,
+            RejoiningStatus: 1,
+            RejoiningDate: 1,
+            RejoinedOn: 1,
+            LeaveEntitlementType: 1,
+            PayType: 1,
+            UnitOfLeave: 1,
           },
         },
         { $sort: { AppliedOn: -1 } },
         { $skip: args.skipCount || 0 },
-        { $limit: args.maxResultCount || 10 },
+        { $limit: args.maxResultCount || 5 },
       ];
 
       const result = await db
         .collection("EmployeeLeaveApplications")
         .aggregate(aggregationPipeline)
         .toArray();
-
-      // ------------------ Map results ------------------
-      return result.map((app: any) => ({
-        applicationId: app._id.toString("base64"),
-        status: app.ApprovalStatus?.toString(),
-        leaveTypeName: app.LeaveTypeName?.en?.Name || "N/A",
-        appliedOn: app.AppliedOn?.toISOString(),
-        approvedOn: app.ApprovedOn ? app.ApprovedOn.toISOString() : null,
+      // console.log("Application History Result:", result);
+      const mappedItems = result.map((app: any) => ({
+        id: app._id.toString("hex"), // convert Binary/UUID to string
+        creationTime: app.AppliedOn?.toISOString() || null,
+        employeeLeaveMapId: app._id.toString("hex"),
+        leaveTypeShortCode: app.LeaveTypeShortCode || "N/A",
+        employeeLeaveTypeId: app._id.toString("hex"),
+        leaveTypeName: {
+          en: app.LeaveTypeName?.en?.Name || "N/A",
+          ar: app.LeaveTypeName?.ar?.Name || "N/A",
+        },
+        employeeId: app.EmployeeId?.toString("hex") || null,
+        employeePlaceholderId: app.EmployeeId?.toString("hex") || null,
+        thumbnailPicture: app.ThumbnailPicture || null,
+        employeeCode: app.EmployeeCode || null,
+        employeeName: {
+          en: app.EmployeeName?.en?.FullName || "N/A",
+          ar: app.EmployeeName?.ar?.FullName || "N/A",
+        },
+        leaveEntitlementType: app.LeaveEntitlementType || 0,
+        payType: app.PayType || 0,
+        unitOfLeave: app.UnitOfLeave || 0,
+        leavePeriod:
+          app.LeavePeriod?.StartDate && app.LeavePeriod?.EndDate
+            ? `${new Date(app.LeavePeriod.StartDate).toLocaleDateString("en-GB", {
+              day: "2-digit",
+              month: "short",
+            })} - ${new Date(app.LeavePeriod.EndDate).toLocaleDateString(
+              "en-GB",
+              { day: "2-digit", month: "short", year: "numeric" }
+            )}`
+            : null,
+        durationApplied: app.DurationApplied || 0,
+        rejoinConfRequired: app.RejoinConfRequired || false,
+        isRejoined: app.IsRejoined || false,
+        rejoiningStatus:
+          typeof app.RejoiningStatus === "number"
+            ? app.RejoiningStatus
+            : 0, // avoid object error
+        approvalStatus: app.ApprovalStatus || 0,
+        appliedOn: app.AppliedOn?.toISOString().split("T")[0] || null,
+        approvedOn: app.ApprovedOn?.toISOString().split("T")[0] || null,
+        rejoiningDate: app.RejoiningDate?.toISOString().split("T")[0] || null,
+        rejoinedOn: app.RejoinedOn?.toISOString().split("T")[0] || null,
       }));
+
+      // total count for pagination
+      const totalCount = await db
+        .collection("EmployeeLeaveApplications")
+        .countDocuments(matchStage);
+
+      // return wrapper with leaveApplications
+      return {
+        items: mappedItems,
+        totalCount,
+      };
     },
+
     // Get Encashment Applications
     getEncashmentApplications: async (
       _parent: any,
       args: {
         tenantIdBase64: string;
         companyIdBase64: string;
-        filter?: string;
         leaveTypeIdBase64?: string;
-        employeeLeaveTypeIdBase64?: string;
         employeeIdBase64?: string;
-        unitOfLeave?: number;
         approvalStatus?: string;
-        employeePlaceholderIdsBase64?: string[];
-        applicationDate?: string;
         skipCount?: number;
         maxResultCount?: number;
       }
@@ -563,18 +625,6 @@ export const resolvers = {
         );
       }
 
-      if (args.filter) {
-        matchStage["$or"] = [
-          {
-            "EmployeeName.en.FullName": {
-              $regex: `.*${args.filter}.*`,
-              $options: "i",
-            },
-          },
-          { EmployeeCode: { $regex: `^${args.filter}$`, $options: "i" } },
-        ];
-      }
-
       if (args.leaveTypeIdBase64) {
         matchStage.LeaveTypeId = new Binary(
           Buffer.from(args.leaveTypeIdBase64, "base64"),
@@ -582,36 +632,9 @@ export const resolvers = {
         );
       }
 
-      if (args.employeeLeaveTypeIdBase64) {
-        matchStage.EmployeeLeaveTypeId = new Binary(
-          Buffer.from(args.employeeLeaveTypeIdBase64, "base64"),
-          3
-        );
-      }
-
-      if (args.unitOfLeave !== undefined) {
-        matchStage.UnitOfLeave = args.unitOfLeave;
-      }
-
       if (args.approvalStatus) {
         matchStage.ApprovalStatus = parseInt(args.approvalStatus, 10);
       }
-
-      if (args.employeePlaceholderIdsBase64) {
-        matchStage.EmployeePlaceholderId = {
-          $in: args.employeePlaceholderIdsBase64.map(
-            (id) => new Binary(Buffer.from(id, "base64"), 3)
-          ),
-        };
-      }
-
-      if (args.applicationDate) {
-        const start = new Date(args.applicationDate);
-        const end = new Date(args.applicationDate);
-        end.setDate(end.getDate() + 1);
-        matchStage.ApplicationDate = { $gte: start, $lt: end };
-      }
-
       const aggregationPipeline = [
         { $match: matchStage },
         {
@@ -621,89 +644,255 @@ export const resolvers = {
             EmployeeCode: 1,
             LeaveTypeName: 1,
             EncashmentQuantityApplied: 1,
+            EncashmentQuantityApproved: 1,
             AppliedOn: 1,
             ApprovalStatus: 1,
             IsPaid: 1,
+            LeaveTypeShortCode: 1,
+            EmployeeId: 1,
+            EmployeePlaceholderId: 1,
+            ThumbnailPicture: 1,
+            LeaveEntitlementType: 1,
+            PayType: 1,
+            UnitOfLeave: 1,
+            ApprovedOn: 1,
           },
         },
         { $sort: { AppliedOn: -1 } },
         { $skip: args.skipCount || 0 },
-        { $limit: args.maxResultCount || 10 },
+        { $limit: args.maxResultCount || 5 },
       ];
 
       const result = await db
         .collection("EmployeeLeaveEncashments")
         .aggregate(aggregationPipeline)
         .toArray();
+      // console.log("Encashment Applications Result:", result);
 
-      return result.map((encash: any) => ({
-        encashmentId: encash._id ? encash._id.toString("base64") : null,
-        employeeName: encash.EmployeeName?.en?.FullName || "N/A",
+
+      const mappedItems = result.map((encash: any) => ({
+        id: encash._id?.toString("hex") || null,
+        CreationTime: encash.AppliedOn?.toISOString() || null,
+        employeeLeaveMapId: encash._id?.toString("hex") || null,
+        leaveTypeShortCode: encash.LeaveTypeShortCode || "N/A",
+        employeeLeaveTypeId: encash._id?.toString("hex") || null,
+        leaveTypeName: {
+          en: encash.LeaveTypeName?.en?.Name || "N/A",
+          ar: encash.LeaveTypeName?.ar?.Name || "N/A",
+        },
+        employeeId: encash.EmployeeId?.toString("hex") || null,
+        employeePlaceholderId: encash.EmployeePlaceholderId?.toString("hex") || null,
+        thumbnailPicture: encash.ThumbnailPicture || null,
         employeeCode: encash.EmployeeCode || "N/A",
-        leaveTypeName: encash.LeaveTypeName?.en?.Name || "N/A",
-        encashDays: encash.EncashmentQuantityApplied || 0,
-        appliedOn: encash.AppliedOn ? encash.AppliedOn.toISOString() : null,
-        approvalStatus:
-          encash.ApprovalStatus !== undefined
-            ? encash.ApprovalStatus.toString()
-            : "N/A",
+        employeeName: {
+          en: encash.EmployeeName?.en?.FullName || "N/A",
+          ar: encash.EmployeeName?.ar?.FullName || "N/A",
+        },
+        leaveEntitlementType: encash.LeaveEntitlementType || 0,
+        payType: encash.PayType || 0,
+        unitOfLeave: encash.UnitOfLeave || 0,
+        applicationDate: encash.AppliedOn?.toISOString() || null,
+        encashBalanceAsOn: encash.AppliedOn?.toISOString() || null,
+        encashmentQuantityApplied: encash.EncashmentQuantityApplied?.toString() || "0",
+        encashmentQuantityApproved: encash.EncashmentQuantityApproved?.toString() || "0",
         isPaid: encash.IsPaid ?? false,
+        approvalStatus: encash.ApprovalStatus ?? 0,
+        approvedOn: encash.ApprovedOn?.toISOString().split("T")[0] || null,
       }));
-    },
-    // Dashboard API
-    getDashboardData: async (
-      _parent: any,
-      args: {
-        tenantIdBase64: string;
-        companyIdBase64: string;
-        employeeIdBase64: string;
-      }
-    ) => {
-      try {
-        const [
-          todoList,
-          pendingApplications,
-          leaveBalance,
-          applicationHistory,
-          encashmentApplications,
-        ] = await Promise.all([
-          resolvers.Query.getTodoList(_parent, {
-            companyIdBase64: args.companyIdBase64,
-            employeeIdBase64: args.employeeIdBase64,
-          }),
-          resolvers.Query.getMyPendingApplications(_parent, {
-            companyIdBase64: args.companyIdBase64,
-            employeeIdBase64: args.employeeIdBase64,
-            isPending: true,
-          }),
-          resolvers.Query.getLeaveBalance(_parent, {
-            tenantIdBase64: args.tenantIdBase64,
-            companyIdBase64: args.companyIdBase64,
-            employeeIdBase64: args.employeeIdBase64,
-          }),
-          resolvers.Query.getApplicationHistory(_parent, {
-            tenantIdBase64: args.tenantIdBase64,
-            companyIdBase64: args.companyIdBase64,
-            employeeIdBase64: args.employeeIdBase64,
-          }),
-          resolvers.Query.getEncashmentApplications(_parent, {
-            tenantIdBase64: args.tenantIdBase64,
-            companyIdBase64: args.companyIdBase64,
-            employeeIdBase64: args.employeeIdBase64,
-          }),
-        ]);
+      console.log("Mapped Encashment Items:", mappedItems);
+      // total count for pagination
+      const totalCount = await db
+        .collection("EmployeeLeaveEncashments")
+        .countDocuments(matchStage);
 
-        return {
-          todoList,
-          pendingApplications,
-          leaveBalance,
-          applicationHistory,
-          encashmentApplications,
-        };
-      } catch (error) {
-        console.error("Error fetching dashboard data:", error);
-        throw new Error("Failed to fetch dashboard data");
-      }
+      // return wrapper with leaveEncashmentApplications
+      return {
+        items: mappedItems,
+        totalCount,
+      };
     },
+
+    // Get Leave Resumption Applications
+    // getLeaveResumptionApplications: async (
+    //   _parent: any,
+    //   args: {
+    //     tenantIdBase64: string;
+    //     companyIdBase64: string;
+    //     employeeIdBase64?: string;
+    //     leaveTypeIdBase64?: string;
+    //     approvalStatus?: string;
+    //     skipCount?: number;
+    //     maxResultCount?: number;
+    //   }
+    // ) => {
+    //   await connectDB(LEAVE_DB_NAME);
+    //   const db = getDb(LEAVE_DB_NAME);
+
+    //   // ------------------ Match Stage ------------------
+    //   const matchStage: any = {
+    //     TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
+    //     CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+    //     // EmployeeId: new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
+    //   };
+
+    //   if (args.leaveTypeIdBase64) {
+    //     matchStage.LeaveTypeId = new Binary(
+    //       Buffer.from(args.leaveTypeIdBase64, "base64"),
+    //       3
+    //     );
+    //   }
+
+    //   if (args.approvalStatus) {
+    //     matchStage.ApprovalStatus = parseInt(args.approvalStatus, 10);
+    //   }
+
+    //   // ------------------ Aggregation Pipeline ------------------
+    //   const aggregationPipeline = [
+    //     { $match: matchStage },
+    //     {
+    //       $project: {
+    //         _id: 1,
+    //         CreationTime: 1,
+    //         EmployeeId: 1,
+    //         EmployeePlaceholderId: 1,
+    //         EmployeeCode: 1,
+    //         EmployeeName: 1,
+    //         ThumbnailPicture: 1,
+    //         LeaveTypeShortCode: 1,
+    //         LeaveTypeName: 1,
+    //         LeaveEntitlementType: 1,
+    //         PayType: 1,
+    //         UnitOfLeave: 1,
+    //         LeavePeriod: 1,
+    //         DurationApproved: 1,
+    //         RejoinConfRequired: 1,
+    //         IsRejoined: 1,
+    //         RejoiningStatus: 1,
+    //         RejoiningDate: 1,
+    //         RejoinedOn: 1,
+    //         ApprovalStatus: 1,
+    //       },
+    //     },
+    //     { $sort: { CreationTime: -1 } },
+    //     { $skip: args.skipCount || 0 },
+    //     { $limit: args.maxResultCount || 5 }, // last 5 resumption applications
+    //   ];
+
+    //   const result = await db
+    //     .collection("LeaveResumptions")
+    //     .aggregate(aggregationPipeline)
+    //     .toArray();
+
+    //   // ------------------ Mapping to DTO ------------------
+    //   const mappedItems = result.map((res: any) => ({
+    //     id: res._id?.toString("hex") || null,
+    //     creationTime: res.CreationTime?.toISOString() || null,
+    //     employeeLeaveMapId: res._id?.toString("hex") || null,
+    //     leaveTypeShortCode: res.LeaveTypeShortCode || "N/A",
+    //     employeeLeaveTypeId: res._id?.toString("hex") || null,
+    //     leaveTypeName: {
+    //       en: res.LeaveTypeName?.en?.Name || "N/A",
+    //       ar: res.LeaveTypeName?.ar?.Name || "N/A",
+    //     },
+    //     employeeId: res.EmployeeId?.toString("hex") || null,
+    //     employeePlaceholderId: res.EmployeePlaceholderId?.toString("hex") || null,
+    //     thumbnailPicture: res.ThumbnailPicture || null,
+    //     employeeCode: res.EmployeeCode || "N/A",
+    //     employeeName: {
+    //       en: res.EmployeeName?.en?.FullName || "N/A",
+    //       ar: res.EmployeeName?.ar?.FullName || "N/A",
+    //     },
+    //     leaveEntitlementType: res.LeaveEntitlementType || 0,
+    //     payType: res.PayType || 0,
+    //     unitOfLeave: res.UnitOfLeave || 0,
+    //     leavePeriod:
+    //       res.LeavePeriod?.StartDate && res.LeavePeriod?.EndDate
+    //         ? `${new Date(res.LeavePeriod.StartDate).toLocaleDateString("en-GB", {
+    //           day: "2-digit",
+    //           month: "short",
+    //         })} - ${new Date(res.LeavePeriod.EndDate).toLocaleDateString(
+    //           "en-GB",
+    //           { day: "2-digit", month: "short", year: "numeric" }
+    //         )}`
+    //         : null,
+    //     durationApproved: res.DurationApproved || 0,
+    //     rejoinConfRequired: res.RejoinConfRequired || false,
+    //     isRejoined: res.IsRejoined || false,
+    //     rejoiningStatus:
+    //       typeof res.RejoiningStatus === "number" ? res.RejoiningStatus : 0,
+    //     rejoiningDate: res.RejoiningDate?.toISOString().split("T")[0] || null,
+    //     rejoinedOn: res.RejoinedOn?.toISOString().split("T")[0] || null,
+    //     approvalStatus: res.ApprovalStatus ?? 0,
+    //   }));
+
+    //   // ------------------ Total Count ------------------
+    //   const totalCount = await db
+    //     .collection("LeaveResumptions")
+    //     .countDocuments(matchStage);
+
+    //   // ------------------ Return Wrapper ------------------
+    //   return {
+    //     items: mappedItems,
+    //     totalCount,
+    //   };
+    // },
+
+
+
+    // Dashboard API
+    // getDashboardData: async (
+    //   _parent: any,
+    //   args: {
+    //     tenantIdBase64: string;
+    //     companyIdBase64: string;
+    //     employeeIdBase64: string;
+    //   }
+    // ) => {
+    //   try {
+    //     const [
+    //       todoList,
+    //       pendingApplications,
+    //       leaveBalance,
+    //       applicationHistory,
+    //       encashmentApplications,
+    //     ] = await Promise.all([
+    //       resolvers.Query.getTodoList(_parent, {
+    //         companyIdBase64: args.companyIdBase64,
+    //         employeeIdBase64: args.employeeIdBase64,
+    //       }),
+    //       resolvers.Query.getMyPendingApplications(_parent, {
+    //         companyIdBase64: args.companyIdBase64,
+    //         employeeIdBase64: args.employeeIdBase64,
+    //         isPending: true,
+    //       }),
+    //       resolvers.Query.getLeaveBalance(_parent, {
+    //         tenantIdBase64: args.tenantIdBase64,
+    //         companyIdBase64: args.companyIdBase64,
+    //         employeeIdBase64: args.employeeIdBase64,
+    //       }),
+    //       resolvers.Query.getApplicationHistory(_parent, {
+    //         tenantIdBase64: args.tenantIdBase64,
+    //         companyIdBase64: args.companyIdBase64,
+    //         employeeIdBase64: args.employeeIdBase64,
+    //       }),
+    //       resolvers.Query.getEncashmentApplications(_parent, {
+    //         tenantIdBase64: args.tenantIdBase64,
+    //         companyIdBase64: args.companyIdBase64,
+    //         employeeIdBase64: args.employeeIdBase64,
+    //       }),
+    //     ]);
+
+    //     return {
+    //       todoList,
+    //       pendingApplications,
+    //       leaveBalance,
+    //       applicationHistory,
+    //       encashmentApplications,
+    //     };
+    //   } catch (error) {
+    //     console.error("Error fetching dashboard data:", error);
+    //     throw new Error("Failed to fetch dashboard data");
+    //   }
+    // },
   },
 };
