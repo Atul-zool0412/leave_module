@@ -344,6 +344,7 @@ export const resolvers = {
                 : "Credit",
           leaveAdded: tx.leaveAdded.toString(),
           leaveUsed: tx.leaveUsed.toString(),
+          
           LeaveExpired: tx.transactionType === 2 ? tx.leaveUsed.toString() : "0",
         })),
       }));
@@ -447,7 +448,7 @@ export const resolvers = {
         .collection("TaskApprovals")
         .aggregate(aggregationPipeline)
         .toArray();
-      console.log("Pending Applications:", result);
+      // console.log("Pending Applications:", result);
 
       return {
         items: result.map((doc: any) => ({
@@ -699,7 +700,7 @@ export const resolvers = {
         approvalStatus: encash.ApprovalStatus ?? 0,
         approvedOn: encash.ApprovedOn?.toISOString().split("T")[0] || null,
       }));
-      console.log("Mapped Encashment Items:", mappedItems);
+      // console.log("Mapped Encashment Items:", mappedItems);
       // total count for pagination
       const totalCount = await db
         .collection("EmployeeLeaveEncashments")
