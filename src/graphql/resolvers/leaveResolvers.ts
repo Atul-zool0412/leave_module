@@ -20,7 +20,7 @@ export const resolvers = {
         tenantIdBase64: string;
         companyIdBase64: string;
         employeeIdBase64: string;
-        status?: number; // numeric status
+        status?: number;
       }
     ) => {
       await connectDB(TASK_DB_NAME);
@@ -116,8 +116,7 @@ export const resolvers = {
       };
     },
 
-
-    // Get Leave Balance
+// get leave balance
     getLeaveBalance: async (
       _parent: any,
       args: {
@@ -130,7 +129,6 @@ export const resolvers = {
       const db = getDb(LEAVE_DB_NAME);
       // const today = new Date();
       const today = new Date("2025-10-19T04:55:52.156Z");
-      // console.log(today);
 
       // 1. Fetch employee details
       const employeeLeaveType = await db
@@ -138,9 +136,10 @@ export const resolvers = {
         .findOne({
           TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
           CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-          EmployeeCode: args.employeeIdBase64,
+          EmployeeId: new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
           IsDeleted: false,
         });
+
       if (!employeeLeaveType) throw new Error("Employee not found");
 
       const activeLeaveTypes = employeeLeaveType.EmployeeLeaveTypes.filter(
@@ -151,9 +150,9 @@ export const resolvers = {
       const aggregationPipeline: any[] = [
         {
           $match: {
-            EmployeeCode: employeeLeaveType.EmployeeCode,
+            EmployeeId: new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
             IsDeleted: false,
-            EmployeeLeaveTypeId: { $in: activeLeaveTypes.map((elt: any) => elt._id) }
+            EmployeeLeaveTypeId: { $in: activeLeaveTypes.map((elt: any) => elt._id) },
           },
         },
         { $unwind: "$LeaveLedgers" },
@@ -164,9 +163,9 @@ export const resolvers = {
             $expr: {
               $and: [
                 { $eq: [{ $year: "$LeaveLedgers.Date" }, today.getFullYear()] },
-                { $eq: [{ $month: "$LeaveLedgers.Date" }, today.getMonth() + 1] }
-              ]
-            }
+                { $eq: [{ $month: "$LeaveLedgers.Date" }, today.getMonth() + 1] },
+              ],
+            },
           },
         },
         { $sort: { "LeaveLedgers.Date": -1 } },
@@ -178,7 +177,7 @@ export const resolvers = {
             year: { $year: "$LeaveLedgers.Date" },
             month: { $month: "$LeaveLedgers.Date" },
             leaveExpiredNum: {
-              $cond: [{ $eq: ["$LeaveLedgers.TransactionType", 2] }, "$LeaveLedgers.LeaveUsed", 0]
+              $cond: [{ $eq: ["$LeaveLedgers.TransactionType", 2] }, "$LeaveLedgers.LeaveUsed", 0],
             },
             leaveBalanceNum: { $toDouble: { $ifNull: ["$LeaveLedgers.LeaveBalance", 0] } },
           },
@@ -242,11 +241,6 @@ export const resolvers = {
             lastDate: { $first: "$lastDate" },
           },
         },
-        // // Sort by year + month (latest first)
-        // // { $sort: { "_id.year": -1, "_id.month": -1 } },
-
-        // // {$sort: { "lastDate": -1 }},
-        // // Keep only the latest month per leaveType
         {
           $group: {
             _id: "$_id.leaveTypeId",
@@ -257,7 +251,7 @@ export const resolvers = {
             totalCredit: { $first: "$totalCredit" },
             totalDebit: { $first: "$totalDebit" },
             leaveExpired: { $first: "$leaveExpired" },
-            currentBalance: { $first: "$lastLeaveBalance" }, // ✅ updated to reflect balance as of today
+            currentBalance: { $first: "$lastLeaveBalance" },
           },
         },
         // Lookup PayType + LeaveEntitlementType
@@ -270,14 +264,14 @@ export const resolvers = {
                 $match: {
                   TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
                   CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-                  EmployeeCode: args.employeeIdBase64
-                }
+                  EmployeeId: new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
+                },
               },
               { $unwind: "$EmployeeLeaveTypes" },
               {
                 $match: {
-                  $expr: { $eq: ["$EmployeeLeaveTypes.LeaveTypeId", "$$leaveTypeId"] }
-                }
+                  $expr: { $eq: ["$EmployeeLeaveTypes.LeaveTypeId", "$$leaveTypeId"] },
+                },
               },
               {
                 $project: {
@@ -289,12 +283,12 @@ export const resolvers = {
                   CountryCode: "$EmployeeLeaveTypes.CountryCode",
                   IsCustomized: "$EmployeeLeaveTypes.IsCustomized",
                   LeaveTypeName: "$EmployeeLeaveTypes.LeaveTypeName",
-                  _id: 0
-                }
-              }
+                  _id: 0,
+                },
+              },
             ],
-            as: "leaveMap"
-          }
+            as: "leaveMap",
+          },
         },
         { $unwind: { path: "$leaveMap", preserveNullAndEmptyArrays: true } },
         // Final shape
@@ -303,7 +297,7 @@ export const resolvers = {
             EmployeeLeaveTypeId: "$_id",
             LeaveTypeName: {
               en: "$leaveTypeName.en.Name",
-              ar: "$leaveTypeName.ar.Name"
+              ar: "$leaveTypeName.ar.Name",
             },
             Year: 1,
             Month: 1,
@@ -313,7 +307,7 @@ export const resolvers = {
             IsCountrySpecific: "$leaveMap.IsCountrySpecific",
             CountryCode: "$leaveMap.CountryCode",
             IsCustomized: "$leaveMap.IsCustomized",
-            currentBalance: 1, // ✅ reflects leave balance as of today
+            currentBalance: 1,
             transactionCounts: 1,
             leaveExpired: 1,
             _id: 0,
@@ -326,8 +320,6 @@ export const resolvers = {
         .aggregate(aggregationPipeline)
         .toArray();
 
-      // console.log("leaveTypes:", leaveTypes);
-      // Map transactionCounts with CreditOrDebit dynamically
       const employeeLeaveTypes = leaveTypes.map((lt: any) => ({
         ...lt,
         EmployeeLeaveTypeId: lt.EmployeeLeaveTypeId
@@ -344,7 +336,6 @@ export const resolvers = {
                 : "Credit",
           leaveAdded: tx.leaveAdded.toString(),
           leaveUsed: tx.leaveUsed.toString(),
-          
           LeaveExpired: tx.transactionType === 2 ? tx.leaveUsed.toString() : "0",
         })),
       }));
