@@ -1,10 +1,13 @@
 import dotenv from "dotenv";
 dotenv.config();
-import { Binary } from "mongodb";
 import GraphQLJSON from "graphql-type-json";
 import connectDB, { getDb } from "../../config/db";
 import { TransactionType } from "../../enum/TransactionType";
 import { TodoStatus } from "../../enum/TodoStatus";
+import { IQueryContext } from "interface/interface";
+import { binaryToUUID, guidToBinary } from "../../utills/idConversion";
+// import { Binary } from "mongodb";
+
 
 const LEAVE_DB_NAME = process.env.LEAVE_DB_NAME || "LeaveSvcNET8test";
 const TASK_DB_NAME = process.env.TASK_DB_NAME || "TaskMgmtSvcNET8test";
@@ -17,30 +20,34 @@ export const resolvers = {
     getTodoList: async (
       _parent: any,
       args: {
-        tenantIdBase64: string;
-        companyIdBase64: string;
-        employeeIdBase64: string;
-        status?: number;
-      }
+        tenantId: string,
+        companyId: string,
+        employeeId: string,
+        todoStatus: number
+      },
+      context: IQueryContext
     ) => {
+
+      // Convert token UUIDs to MongoDB Binary
+      const tenantId = guidToBinary(args.tenantId);
+      const companyId = guidToBinary(args.companyId)
+      const employeeId = guidToBinary(args.employeeId);
+      // Connect to MongoDB and get DB instance
       await connectDB(TASK_DB_NAME);
       const db = getDb(TASK_DB_NAME);
 
+      // Build match stage
       const matchStage: any = {
-        TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-        CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-        "Employee.EmployeeId": new Binary(
-          Buffer.from(args.employeeIdBase64, "base64"),
-          3
-        ),
+        TenantId: tenantId,
+        CompanyId: companyId,
+        "Employee.EmployeeId": employeeId,
         IsDeleted: false,
-        Status: TodoStatus.Pending // default status if not provided
+        Status: TodoStatus.Pending, // default Pending
       };
 
+      // Aggregation pipeline
       const aggregationPipeline = [
         { $match: matchStage },
-
-        // Convert Assigned on string to Date for sorting
         {
           $addFields: {
             assignedOnDate: {
@@ -48,25 +55,22 @@ export const resolvers = {
                 dateString: "$ModuleData.keyValuePair['Assigned on'].en",
                 format: "%d %b %Y",
                 onError: null,
-                onNull: null
-              }
-            }
-          }
+                onNull: null,
+              },
+            },
+          },
         },
-
-        {
-          $sort: { assignedOnDate: -1 }
-        },
-
-        { $limit: 50 }
+        { $sort: { assignedOnDate: -1 } },
+        { $limit: 50 },
       ];
 
+      // Execute aggregation
       const result = await db
         .collection("TodoTaskApproval")
         .aggregate(aggregationPipeline)
         .toArray();
 
-      // Map DB result to desired GraphQL response
+      // Map DB results to GraphQL response
       const items = result.map((todo: any) => ({
         createdBy: todo.CreatedBy
           ? {
@@ -80,8 +84,8 @@ export const resolvers = {
                 : "",
               ar: todo.CreatedBy?.IsEmployee
                 ? todo.CreatedBy?.Name?.ar?.FullName || ""
-                : ""
-            }
+                : "",
+            },
           }
           : null,
 
@@ -92,8 +96,8 @@ export const resolvers = {
             isEmployee: todo.AssignedTo?.IsEmployee ?? true,
             employee: {
               en: todo.AssignedTo?.Name?.en?.FullName || "",
-              ar: todo.AssignedTo?.Name?.ar?.FullName || ""
-            }
+              ar: todo.AssignedTo?.Name?.ar?.FullName || "",
+            },
           }
           : null,
 
@@ -102,55 +106,69 @@ export const resolvers = {
         appService: todo.TaskDefinition?.TaskModule?.AppService || null,
         moduleData: todo.ModuleData,
         isEmployeeSpecificTodo: todo.IsEmployeeSpecificTodo,
-        employeeId: todo.Employee?.EmployeeId || null,
+        employeeId: todo.Employee?.EmployeeId
+          ? binaryToUUID(todo.Employee.EmployeeId) // Convert to Binary here
+          : null,
         EmployeeName: todo.Employee?.Name || null,
         externalId: todo.Externald || null,
         formUrl: todo.FormUrl,
         status: todo.Status,
-        priority: todo.Priority
+        priority: todo.Priority,
       }));
 
       return {
         items,
-        totalCount: items.length
+        totalCount: items.length,
       };
     },
 
-// get leave balance
+    // get leave balance
     getLeaveBalance: async (
       _parent: any,
       args: {
-        tenantIdBase64: string;
-        companyIdBase64: string;
-        employeeIdBase64: string;
-      }
+        tenantId: string,
+        companyId: string,
+        employeeId: string,
+        isActive?: boolean
+      },
+      context: IQueryContext
     ) => {
-      await connectDB(LEAVE_DB_NAME);
+      // await connectDB(LEAVE_DB_NAME);
       const db = getDb(LEAVE_DB_NAME);
       // const today = new Date();
       const today = new Date("2025-10-19T04:55:52.156Z");
 
+      // const args = context.tokenData;
+
+      // Convert token UUIDs to MongoDB Binary
+      const tenantId = guidToBinary(args.tenantId);
+      const companyId = guidToBinary(args.companyId)
+      const employeeId = guidToBinary(args.employeeId);
+
+      //  console.log("emp", args);
+
+      //  console.log("scadca", tenantId , companyId, employeeId);
       // 1. Fetch employee details
       const employeeLeaveType = await db
         .collection("EmployeeLeaveMapCollection")
         .findOne({
-          TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-          CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-          EmployeeId: new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
+          TenantId: tenantId,
+          CompanyId: companyId,
+          EmployeeId: employeeId,
           IsDeleted: false,
         });
-
+      console.log("scacas", employeeLeaveType);
       if (!employeeLeaveType) throw new Error("Employee not found");
 
       const activeLeaveTypes = employeeLeaveType.EmployeeLeaveTypes.filter(
-        (leaveTypes: any) => leaveTypes.IsActive === true
+        (leaveTypes: any) => leaveTypes.IsActive == args.isActive
       );
 
       // 2. Aggregate leave transactions per leave type
       const aggregationPipeline: any[] = [
         {
           $match: {
-            EmployeeId: new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
+            EmployeeId: employeeId,
             IsDeleted: false,
             EmployeeLeaveTypeId: { $in: activeLeaveTypes.map((elt: any) => elt._id) },
           },
@@ -262,9 +280,9 @@ export const resolvers = {
             pipeline: [
               {
                 $match: {
-                  TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-                  CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-                  EmployeeId: new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
+                  TenantId: tenantId,
+                  CompanyId: companyId,
+                  EmployeeId: employeeId,
                 },
               },
               { $unwind: "$EmployeeLeaveTypes" },
@@ -319,12 +337,12 @@ export const resolvers = {
         .collection("EmployeeLeaveLedgerCollection")
         .aggregate(aggregationPipeline)
         .toArray();
+      // console.log("leave types", leaveTypes);
 
       const employeeLeaveTypes = leaveTypes.map((lt: any) => ({
         ...lt,
-        EmployeeLeaveTypeId: lt.EmployeeLeaveTypeId
-          ? Buffer.from(lt.EmployeeLeaveTypeId.buffer).toString()
-          : null,
+        EmployeeLeaveTypeId: lt.EmployeeLeaveTypeId ? binaryToUUID(lt.EmployeeLeaveTypeId) : null,
+
         transactionCounts: lt.transactionCounts.map((tx: any) => ({
           ...tx,
           CreditOrDebit:
@@ -341,11 +359,12 @@ export const resolvers = {
       }));
 
       return {
-        EmployeeId: employeeLeaveType._id.toString(),
+        EmployeeId: binaryToUUID(employeeLeaveType._id.toString("hex")),
         EmployeeName: {
-          en: employeeLeaveType.EmployeeName.en.FullName,
-          ar: employeeLeaveType.EmployeeName.ar.FullName,
+          en: employeeLeaveType?.EmployeeName?.en?.FullName ?? "N/A",
+          ar: employeeLeaveType?.EmployeeName?.ar?.FullName ?? "N/A",
         },
+
         EmployeeCode: employeeLeaveType.EmployeeCode,
         LeaveBalanceAsOn: today.toISOString().split("T")[0],
         employeeLeaveTypes,
@@ -356,46 +375,67 @@ export const resolvers = {
     getMyPendingApplications: async (
       _parent: any,
       args: {
-        tenantIdBase64: string;
-        companyIdBase64: string;
-        employeeIdBase64: string;
-      }
+        tenantId: string,
+        companyId: string,
+        employeeId: string
+        ApprovalStatus: number;
+        skipCount?: number;
+        maxResultCount?: number;
+      },
+      context: IQueryContext
     ) => {
+      // const args = context.tokenData;
+
+      // Convert token UUIDs to MongoDB Binary
+      const tenantId = guidToBinary(args.tenantId);
+      const companyId = guidToBinary(args.companyId)
+      const employeeId = guidToBinary(args.employeeId);
+
+
+      // Connect to MongoDB and get DB instance
       await connectDB(TASK_DB_NAME);
       const db = getDb(TASK_DB_NAME);
 
-      const tenantId = new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3);
-      const companyId = new Binary(Buffer.from(args.companyIdBase64, "base64"), 3);
-      const employeeId = new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3);
-
-      const aggregationPipeline = [
+      const aggregationPipeline: any[] = [
         {
           $match: {
             TenantId: tenantId,
             CompanyId: companyId,
             "Employee.EmployeeId": employeeId,
             IsApprovalForEmployee: true,
-            ApprovalStatus: 1,
+            ApprovalStatus: args.ApprovalStatus,
             $or: [{ IsDeleted: false }, { IsDeleted: { $exists: false } }],
           },
         },
         { $sort: { CreationTime: -1 } },
-        { $limit: 50 },
+      ];
+
+      // Add skip and limit dynamically
+      if (args.skipCount) {
+        aggregationPipeline.push({ $skip: args.skipCount });
+      }
+      if (args.maxResultCount) {
+        aggregationPipeline.push({ $limit: args.maxResultCount });
+      } else {
+        aggregationPipeline.push({ $limit: 5 }); // default limit
+      }
+
+      // Rest of your stages
+      aggregationPipeline.push(
         {
           $addFields: {
             employeeNameEn: { $ifNull: ["$Employee.Name.en.FullName", ""] },
             employeeNameAr: { $ifNull: ["$Employee.Name.ar.FullName", ""] },
             createdByEmployee: {
               en: { $ifNull: ["$CreatedBy.Employee.Name.en.FullName", ""] },
-              ar: { $ifNull: ["$CreatedBy.Employee.Name.ar.FullName", ""] }
+              ar: { $ifNull: ["$CreatedBy.Employee.Name.ar.FullName", ""] },
             },
             pendingEmployeeName: {
               en: { $ifNull: ["$PendingAt.Employee.Name.en.FullName", ""] },
-              ar: { $ifNull: ["$PendingAt.Employee.Name.ar.FullName", ""] }
+              ar: { $ifNull: ["$PendingAt.Employee.Name.ar.FullName", ""] },
             },
-            leaveType: { $ifNull: ["$ModuleData.keyValuePair.Leave Type.en", ""] }
-          }
-
+            leaveType: { $ifNull: ["$ModuleData.keyValuePair.Leave Type.en", ""] },
+          },
         },
         {
           $project: {
@@ -432,14 +472,14 @@ export const resolvers = {
             },
             leaveType: 1,
           },
-        },
-      ];
+        }
+      );
 
       const result = await db
         .collection("TaskApprovals")
         .aggregate(aggregationPipeline)
         .toArray();
-      // console.log("Pending Applications:", result);
+      console.log("result", result);
 
       return {
         items: result.map((doc: any) => ({
@@ -454,41 +494,44 @@ export const resolvers = {
     getApplicationHistory: async (
       _parent: any,
       args: {
-        tenantIdBase64: string;
-        companyIdBase64: string;
-        employeeIdBase64?: string;
+        tenantId: string,
+        companyId: string,
+        employeeId: string
         employeeCode?: string;
-        leaveTypeIdBase64?: string;
+        leaveTypeId?: string;
         approvalStatus?: string;
         skipCount?: number;
         maxResultCount?: number;
-      }
+      }, context: IQueryContext
     ) => {
+      // const args = context.tokenData;
+
+      // Convert token UUIDs to MongoDB Binary
+      const tenantId = guidToBinary(args.tenantId);
+      const companyId = guidToBinary(args.companyId)
+      const employeeId = guidToBinary(args.employeeId);
+
+
+
       await connectDB(LEAVE_DB_NAME);
       const db = getDb(LEAVE_DB_NAME);
 
       // ------------------ Build match stage ------------------
       const matchStage: any = {
-        TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-        CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+        TenantId: tenantId,
+        CompanyId: companyId,
       };
-
       // Employee filter: ID or Code
-      if (args.employeeIdBase64) {
-        matchStage.EmployeeId = new Binary(
-          Buffer.from(args.employeeIdBase64, "base64"),
-          3
-        );
+      if (args.employeeId) {
+        matchStage.EmployeeId = employeeId; // assign token EmployeeId
       } else if (args.employeeCode) {
         matchStage.EmployeeCode = args.employeeCode;
       }
 
 
-      if (args.leaveTypeIdBase64) {
-        matchStage.LeaveTypeId = new Binary(
-          Buffer.from(args.leaveTypeIdBase64, "base64"),
-          3
-        );
+
+      if (args.leaveTypeId) {
+        matchStage.LeaveTypeId = guidToBinary(args.leaveTypeId);
       }
 
       if (args.approvalStatus) {
@@ -533,17 +576,17 @@ export const resolvers = {
         .toArray();
       // console.log("Application History Result:", result);
       const mappedItems = result.map((app: any) => ({
-        id: app._id.toString("hex"), // convert Binary/UUID to string
+        id: binaryToUUID(app._id), // convert Binary/UUID to string
         creationTime: app.AppliedOn?.toISOString() || null,
-        employeeLeaveMapId: app._id.toString("hex"),
+        employeeLeaveMapId: binaryToUUID(app._id),
         leaveTypeShortCode: app.LeaveTypeShortCode || "N/A",
-        employeeLeaveTypeId: app._id.toString("hex"),
+        employeeLeaveTypeId: binaryToUUID(app._id),
         leaveTypeName: {
           en: app.LeaveTypeName?.en?.Name || "N/A",
           ar: app.LeaveTypeName?.ar?.Name || "N/A",
         },
-        employeeId: app.EmployeeId?.toString("hex") || null,
-        employeePlaceholderId: app.EmployeeId?.toString("hex") || null,
+        employeeId: app.EmployeeId ? binaryToUUID(app.EmployeeId) : null,
+        employeePlaceholderId: app.EmployeeId ? binaryToUUID(app.EmployeeId) : null,
         thumbnailPicture: app.ThumbnailPicture || null,
         employeeCode: app.EmployeeCode || null,
         employeeName: {
@@ -567,9 +610,7 @@ export const resolvers = {
         rejoinConfRequired: app.RejoinConfRequired || false,
         isRejoined: app.IsRejoined || false,
         rejoiningStatus:
-          typeof app.RejoiningStatus === "number"
-            ? app.RejoiningStatus
-            : 0, // avoid object error
+          typeof app.RejoiningStatus === "number" ? app.RejoiningStatus : 0,
         approvalStatus: app.ApprovalStatus || 0,
         appliedOn: app.AppliedOn?.toISOString().split("T")[0] || null,
         approvedOn: app.ApprovedOn?.toISOString().split("T")[0] || null,
@@ -593,39 +634,48 @@ export const resolvers = {
     getEncashmentApplications: async (
       _parent: any,
       args: {
-        tenantIdBase64: string;
-        companyIdBase64: string;
-        leaveTypeIdBase64?: string;
-        employeeIdBase64?: string;
+        tenantId: string,
+        companyId: string,
+        employeeId: string
+        employeeCode?: string;
+        leaveTypeId?: string;
         approvalStatus?: string;
         skipCount?: number;
         maxResultCount?: number;
-      }
+      }, context: IQueryContext
     ) => {
+      // const args = context.tokenData;
+
+      // Convert token UUIDs to MongoDB Binary
+      const tenantId = guidToBinary(args.tenantId);
+      const companyId = guidToBinary(args.companyId)
+      const employeeId = guidToBinary(args.employeeId);
+
+
+
       await connectDB(LEAVE_DB_NAME);
       const db = getDb(LEAVE_DB_NAME);
 
+      // ------------------ Build match stage ------------------
       const matchStage: any = {
-        TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-        CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
+        TenantId: tenantId,
+        CompanyId: companyId,
       };
-
-      if (args.employeeIdBase64) {
-        matchStage.EmployeeId = new Binary(
-          Buffer.from(args.employeeIdBase64, "base64"),
-          3
-        );
+      // Employee filter: ID or Code
+      if (args.employeeId) {
+        matchStage.EmployeeId = employeeId; // assign token EmployeeId
+      } else if (args.employeeCode) {
+        matchStage.EmployeeCode = args.employeeCode;
       }
 
-      if (args.leaveTypeIdBase64) {
-        matchStage.LeaveTypeId = new Binary(
-          Buffer.from(args.leaveTypeIdBase64, "base64"),
-          3
-        );
+
+
+      if (args.leaveTypeId) {
+        matchStage.LeaveTypeId = guidToBinary(args.leaveTypeId);
       }
 
       if (args.approvalStatus) {
-        matchStage.ApprovalStatus = parseInt(args.approvalStatus, 10);
+        matchStage.ApprovalStatus = args.approvalStatus;
       }
       const aggregationPipeline = [
         { $match: matchStage },
@@ -663,17 +713,19 @@ export const resolvers = {
 
 
       const mappedItems = result.map((encash: any) => ({
-        id: encash._id?.toString("hex") || null,
+        id: encash._id ? binaryToUUID(encash._id) : null,
         CreationTime: encash.AppliedOn?.toISOString() || null,
-        employeeLeaveMapId: encash._id?.toString("hex") || null,
+        employeeLeaveMapId: encash._id ? binaryToUUID(encash._id) : null,
         leaveTypeShortCode: encash.LeaveTypeShortCode || "N/A",
-        employeeLeaveTypeId: encash._id?.toString("hex") || null,
+        employeeLeaveTypeId: encash._id ? binaryToUUID(encash._id) : null,
         leaveTypeName: {
           en: encash.LeaveTypeName?.en?.Name || "N/A",
           ar: encash.LeaveTypeName?.ar?.Name || "N/A",
         },
-        employeeId: encash.EmployeeId?.toString("hex") || null,
-        employeePlaceholderId: encash.EmployeePlaceholderId?.toString("hex") || null,
+        employeeId: encash.EmployeeId ? binaryToUUID(encash.EmployeeId) : null,
+        employeePlaceholderId: encash.EmployeePlaceholderId
+          ? binaryToUUID(encash.EmployeePlaceholderId)
+          : null,
         thumbnailPicture: encash.ThumbnailPicture || null,
         employeeCode: encash.EmployeeCode || "N/A",
         employeeName: {
@@ -691,6 +743,7 @@ export const resolvers = {
         approvalStatus: encash.ApprovalStatus ?? 0,
         approvedOn: encash.ApprovedOn?.toISOString().split("T")[0] || null,
       }));
+
       // console.log("Mapped Encashment Items:", mappedItems);
       // total count for pagination
       const totalCount = await db

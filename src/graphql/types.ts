@@ -217,23 +217,24 @@ type LeaveResumptionApplicationResponse {
   # ----------------- Queries -----------------
   type Query {
     getTodoList(
-      tenantIdBase64: String!
-      companyIdBase64: String!
-      employeeIdBase64: String!
-      status: Int
+      tenantId: String!
+      companyId: String!
+      employeeId: String!
+      todoStatus: Int
     ): TodoListResponse
 
     getLeaveBalance(
-      tenantIdBase64: String!
-      companyIdBase64: String!
-      employeeIdBase64: String!
+      tenantId: String!
+      companyId: String!
+      employeeId: String!
+      isActive: Boolean
     ): LeaveBalance
 
     getApplicationHistory(
-      tenantIdBase64: String!
-      companyIdBase64: String!
-      leaveTypeIdBase64: String
-      employeeIdBase64: String
+      tenantId: String!
+      companyId: String!
+      employeeId: String!
+      leaveTypeId: String
       approvalStatus: String
       skipCount: Int
       maxResultCount: Int
@@ -250,24 +251,20 @@ type LeaveResumptionApplicationResponse {
   ): LeaveResumptionApplicationResponse
 
     getEncashmentApplications(
-      tenantIdBase64: String!
-      companyIdBase64: String!
-      filter: String
-      leaveTypeIdBase64: String
-      employeeLeaveTypeIdBase64: String
-      employeeIdBase64: String
-      unitOfLeave: Int
+      tenantId: String!
+      companyId: String!
+      employeeId: String!
+      leaveTypeId: String
       approvalStatus: String
-      employeePlaceholderIdsBase64: [String]
-      applicationDate: String
       skipCount: Int
       maxResultCount: Int
     ): EncashmentApplicationResponse
 
     getMyPendingApplications(
-      tenantIdBase64: String!
-      companyIdBase64: String!
-      employeeIdBase64: String!
+      tenantId: String!
+      companyId: String!
+      employeeId: String!
+      ApprovalStatus: Int
       skipCount: Int
       maxResultCount: Int
     ): MyPendingApplicationResponse
