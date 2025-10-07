@@ -230,7 +230,7 @@ type LeaveResumptionApplicationResponse {
       isActive: Boolean
     ): LeaveBalance
 
-    getApplicationHistory(
+    getLeaveApplicationHistory(
       tenantId: String!
       companyId: String!
       employeeId: String!
@@ -240,17 +240,17 @@ type LeaveResumptionApplicationResponse {
       maxResultCount: Int
     ): LeaveApplicationResponse
 
-    getLeaveResumptionApplications(
-      tenantIdBase64: String!
-      companyIdBase64: String!
-      employeeIdBase64: String!
-      leaveTypeIdBase64: String
+    getLeaveResumptionApplicationsHistory(
+      tenantId: String!
+      companyId: String!
+      employeeId: String!
+      leaveTypeId: String
       approvalStatus: String
       skipCount: Int
       maxResultCount: Int
   ): LeaveResumptionApplicationResponse
 
-    getEncashmentApplications(
+    getEncashmentApplicationsHistory(
       tenantId: String!
       companyId: String!
       employeeId: String!

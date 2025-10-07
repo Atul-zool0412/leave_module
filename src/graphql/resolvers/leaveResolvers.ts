@@ -121,7 +121,6 @@ export const resolvers = {
         totalCount: items.length,
       };
     },
-
     // get leave balance
     getLeaveBalance: async (
       _parent: any,
@@ -370,7 +369,6 @@ export const resolvers = {
         employeeLeaveTypes,
       };
     },
-
     // Get My Pending Applications
     getMyPendingApplications: async (
       _parent: any,
@@ -489,9 +487,8 @@ export const resolvers = {
         totalCount: result.length,
       };
     },
-
     // Get Leave Application History
-    getApplicationHistory: async (
+    getLeaveApplicationHistory: async (
       _parent: any,
       args: {
         tenantId: string,
@@ -629,9 +626,145 @@ export const resolvers = {
         totalCount,
       };
     },
+    // Get Leave Resumption Applications
+    getLeaveResumptionApplicationsHistory: async (
+      _parent: any,
+      args: {
+        tenantId: string,
+        companyId: string,
+        employeeId: string
+        employeeCode?: string;
+        leaveTypeId?: string;
+        approvalStatus?: string;
+        skipCount?: number;
+        maxResultCount?: number;
+      }, context: IQueryContext
+    ) => {
+      // const args = context.tokenData;
 
+      // Convert token UUIDs to MongoDB Binary
+      const tenantId = guidToBinary(args.tenantId);
+      const companyId = guidToBinary(args.companyId)
+      const employeeId = guidToBinary(args.employeeId);
+
+
+
+      await connectDB(LEAVE_DB_NAME);
+      const db = getDb(LEAVE_DB_NAME);
+
+      // ------------------ Build match stage ------------------
+      const matchStage: any = {
+        TenantId: tenantId,
+        CompanyId: companyId,
+      };
+      // Employee filter: ID or Code
+      if (args.employeeId) {
+        matchStage.EmployeeId = employeeId; // assign token EmployeeId
+      } else if (args.employeeCode) {
+        matchStage.EmployeeCode = args.employeeCode;
+      }
+
+
+
+      if (args.leaveTypeId) {
+        matchStage.LeaveTypeId = guidToBinary(args.leaveTypeId);
+      }
+
+      if (args.approvalStatus) {
+        matchStage.ApprovalStatus = args.approvalStatus;
+      }
+      // ------------------ Aggregation Pipeline ------------------
+      const aggregationPipeline = [
+        { $match: matchStage },
+        {
+          $project: {
+            _id: 1,
+            CreationTime: 1,
+            EmployeeId: 1,
+            EmployeePlaceholderId: 1,
+            EmployeeCode: 1,
+            EmployeeName: 1,
+            ThumbnailPicture: 1,
+            LeaveTypeShortCode: 1,
+            LeaveTypeName: 1,
+            LeaveEntitlementType: 1,
+            PayType: 1,
+            UnitOfLeave: 1,
+            LeavePeriod: 1,
+            DurationApproved: 1,
+            RejoinConfRequired: 1,
+            IsRejoined: 1,
+            RejoiningStatus: 1,
+            RejoiningDate: 1,
+            RejoinedOn: 1,
+            ApprovalStatus: 1,
+          },
+        },
+        { $sort: { CreationTime: -1 } },
+        { $skip: args.skipCount || 0 },
+        { $limit: args.maxResultCount || 5 }, // last 5 resumption applications
+      ];
+
+      const result = await db
+        .collection("LeaveResumptions")
+        .aggregate(aggregationPipeline)
+        .toArray();
+
+      // ------------------ Mapping to DTO ------------------
+      const mappedItems = result.map((res: any) => ({
+        id: res._id?.toString("hex") || null,
+        creationTime: res.CreationTime?.toISOString() || null,
+        employeeLeaveMapId: res._id?.toString("hex") || null,
+        leaveTypeShortCode: res.LeaveTypeShortCode || "N/A",
+        employeeLeaveTypeId: res._id?.toString("hex") || null,
+        leaveTypeName: {
+          en: res.LeaveTypeName?.en?.Name || "N/A",
+          ar: res.LeaveTypeName?.ar?.Name || "N/A",
+        },
+        employeeId: res.EmployeeId?.toString("hex") || null,
+        employeePlaceholderId: res.EmployeePlaceholderId?.toString("hex") || null,
+        thumbnailPicture: res.ThumbnailPicture || null,
+        employeeCode: res.EmployeeCode || "N/A",
+        employeeName: {
+          en: res.EmployeeName?.en?.FullName || "N/A",
+          ar: res.EmployeeName?.ar?.FullName || "N/A",
+        },
+        leaveEntitlementType: res.LeaveEntitlementType || 0,
+        payType: res.PayType || 0,
+        unitOfLeave: res.UnitOfLeave || 0,
+        leavePeriod:
+          res.LeavePeriod?.StartDate && res.LeavePeriod?.EndDate
+            ? `${new Date(res.LeavePeriod.StartDate).toLocaleDateString("en-GB", {
+              day: "2-digit",
+              month: "short",
+            })} - ${new Date(res.LeavePeriod.EndDate).toLocaleDateString(
+              "en-GB",
+              { day: "2-digit", month: "short", year: "numeric" }
+            )}`
+            : null,
+        durationApproved: res.DurationApproved || 0,
+        rejoinConfRequired: res.RejoinConfRequired || false,
+        isRejoined: res.IsRejoined || false,
+        rejoiningStatus:
+          typeof res.RejoiningStatus === "number" ? res.RejoiningStatus : 0,
+        rejoiningDate: res.RejoiningDate?.toISOString().split("T")[0] || null,
+        rejoinedOn: res.RejoinedOn?.toISOString().split("T")[0] || null,
+        approvalStatus: res.ApprovalStatus ?? 0,
+      }));
+
+      // ------------------ Total Count ------------------
+      const totalCount = await db
+        .collection("LeaveResumptions")
+        .countDocuments(matchStage);
+
+      // ------------------ Return Wrapper ------------------
+      return {
+        items: mappedItems,
+        totalCount,
+      };
+    },
     // Get Encashment Applications
-    getEncashmentApplications: async (
+    getEncashmentApplicationsHistory: async (
       _parent: any,
       args: {
         tenantId: string,
@@ -757,130 +890,6 @@ export const resolvers = {
       };
     },
 
-    // Get Leave Resumption Applications
-    // getLeaveResumptionApplications: async (
-    //   _parent: any,
-    //   args: {
-    //     tenantIdBase64: string;
-    //     companyIdBase64: string;
-    //     employeeIdBase64?: string;
-    //     leaveTypeIdBase64?: string;
-    //     approvalStatus?: string;
-    //     skipCount?: number;
-    //     maxResultCount?: number;
-    //   }
-    // ) => {
-    //   await connectDB(LEAVE_DB_NAME);
-    //   const db = getDb(LEAVE_DB_NAME);
-
-    //   // ------------------ Match Stage ------------------
-    //   const matchStage: any = {
-    //     TenantId: new Binary(Buffer.from(args.tenantIdBase64, "base64"), 3),
-    //     CompanyId: new Binary(Buffer.from(args.companyIdBase64, "base64"), 3),
-    //     // EmployeeId: new Binary(Buffer.from(args.employeeIdBase64, "base64"), 3),
-    //   };
-
-    //   if (args.leaveTypeIdBase64) {
-    //     matchStage.LeaveTypeId = new Binary(
-    //       Buffer.from(args.leaveTypeIdBase64, "base64"),
-    //       3
-    //     );
-    //   }
-
-    //   if (args.approvalStatus) {
-    //     matchStage.ApprovalStatus = parseInt(args.approvalStatus, 10);
-    //   }
-
-    //   // ------------------ Aggregation Pipeline ------------------
-    //   const aggregationPipeline = [
-    //     { $match: matchStage },
-    //     {
-    //       $project: {
-    //         _id: 1,
-    //         CreationTime: 1,
-    //         EmployeeId: 1,
-    //         EmployeePlaceholderId: 1,
-    //         EmployeeCode: 1,
-    //         EmployeeName: 1,
-    //         ThumbnailPicture: 1,
-    //         LeaveTypeShortCode: 1,
-    //         LeaveTypeName: 1,
-    //         LeaveEntitlementType: 1,
-    //         PayType: 1,
-    //         UnitOfLeave: 1,
-    //         LeavePeriod: 1,
-    //         DurationApproved: 1,
-    //         RejoinConfRequired: 1,
-    //         IsRejoined: 1,
-    //         RejoiningStatus: 1,
-    //         RejoiningDate: 1,
-    //         RejoinedOn: 1,
-    //         ApprovalStatus: 1,
-    //       },
-    //     },
-    //     { $sort: { CreationTime: -1 } },
-    //     { $skip: args.skipCount || 0 },
-    //     { $limit: args.maxResultCount || 5 }, // last 5 resumption applications
-    //   ];
-
-    //   const result = await db
-    //     .collection("LeaveResumptions")
-    //     .aggregate(aggregationPipeline)
-    //     .toArray();
-
-    //   // ------------------ Mapping to DTO ------------------
-    //   const mappedItems = result.map((res: any) => ({
-    //     id: res._id?.toString("hex") || null,
-    //     creationTime: res.CreationTime?.toISOString() || null,
-    //     employeeLeaveMapId: res._id?.toString("hex") || null,
-    //     leaveTypeShortCode: res.LeaveTypeShortCode || "N/A",
-    //     employeeLeaveTypeId: res._id?.toString("hex") || null,
-    //     leaveTypeName: {
-    //       en: res.LeaveTypeName?.en?.Name || "N/A",
-    //       ar: res.LeaveTypeName?.ar?.Name || "N/A",
-    //     },
-    //     employeeId: res.EmployeeId?.toString("hex") || null,
-    //     employeePlaceholderId: res.EmployeePlaceholderId?.toString("hex") || null,
-    //     thumbnailPicture: res.ThumbnailPicture || null,
-    //     employeeCode: res.EmployeeCode || "N/A",
-    //     employeeName: {
-    //       en: res.EmployeeName?.en?.FullName || "N/A",
-    //       ar: res.EmployeeName?.ar?.FullName || "N/A",
-    //     },
-    //     leaveEntitlementType: res.LeaveEntitlementType || 0,
-    //     payType: res.PayType || 0,
-    //     unitOfLeave: res.UnitOfLeave || 0,
-    //     leavePeriod:
-    //       res.LeavePeriod?.StartDate && res.LeavePeriod?.EndDate
-    //         ? `${new Date(res.LeavePeriod.StartDate).toLocaleDateString("en-GB", {
-    //           day: "2-digit",
-    //           month: "short",
-    //         })} - ${new Date(res.LeavePeriod.EndDate).toLocaleDateString(
-    //           "en-GB",
-    //           { day: "2-digit", month: "short", year: "numeric" }
-    //         )}`
-    //         : null,
-    //     durationApproved: res.DurationApproved || 0,
-    //     rejoinConfRequired: res.RejoinConfRequired || false,
-    //     isRejoined: res.IsRejoined || false,
-    //     rejoiningStatus:
-    //       typeof res.RejoiningStatus === "number" ? res.RejoiningStatus : 0,
-    //     rejoiningDate: res.RejoiningDate?.toISOString().split("T")[0] || null,
-    //     rejoinedOn: res.RejoinedOn?.toISOString().split("T")[0] || null,
-    //     approvalStatus: res.ApprovalStatus ?? 0,
-    //   }));
-
-    //   // ------------------ Total Count ------------------
-    //   const totalCount = await db
-    //     .collection("LeaveResumptions")
-    //     .countDocuments(matchStage);
-
-    //   // ------------------ Return Wrapper ------------------
-    //   return {
-    //     items: mappedItems,
-    //     totalCount,
-    //   };
-    // },
 
 
 
