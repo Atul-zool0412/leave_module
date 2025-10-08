@@ -167,6 +167,8 @@ export const typeDefs = gql`
   rejoiningDate: String
   rejoinedOn: String
   approvalStatus: Int
+  LateResumptionSettlement: JSON
+  EarlyResumptionSettlement: JSON
 }
 
 type LeaveResumptionApplicationResponse {

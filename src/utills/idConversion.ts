@@ -42,26 +42,41 @@ export function guidToBinary(guidValue: string): Binary {
 }
 
 
-export function base64ToBinary(base64: string): Binary {
-  return new Binary(Buffer.from(base64, "base64"), 3);
-}
-
 /**
  * Convert MongoDB Binary or Base64 string to UUID string
  */
-export function binaryToUUID(binary: Binary | string): string {
-  let buffer: Buffer;
+export function base64ToGuidString(base64String: string | null): string | null {
+  if (!base64String || base64String.trim() === "") return null;
 
-  if (typeof binary === "string") {
-    // if input is Base64 string
-    buffer = Buffer.from(binary, "base64");
-  } else {
-    // if input is Binary object
-    buffer = Buffer.from(binary.buffer); // <-- wrap Uint8Array in Buffer
+  const dotnetBytes = Buffer.from(base64String, "base64");
+  if (dotnetBytes.length !== 16) {
+    throw new Error(`Invalid Base64 GUID length: ${dotnetBytes.length}`);
   }
 
-  const hex = buffer.toString("hex");
+  const pythonBytes = Buffer.alloc(16);
+  pythonBytes[0] = dotnetBytes[3];
+  pythonBytes[1] = dotnetBytes[2];
+  pythonBytes[2] = dotnetBytes[1];
+  pythonBytes[3] = dotnetBytes[0];
+  pythonBytes[4] = dotnetBytes[5];
+  pythonBytes[5] = dotnetBytes[4];
+  pythonBytes[6] = dotnetBytes[7];
+  pythonBytes[7] = dotnetBytes[6];
+  for (let i = 8; i < 16; i++) pythonBytes[i] = dotnetBytes[i];
 
-  // Insert dashes to match standard UUID format
-  return `${hex.substr(0, 8)}-${hex.substr(8, 4)}-${hex.substr(12, 4)}-${hex.substr(16, 4)}-${hex.substr(20, 12)}`;
+  const hex = pythonBytes.toString("hex");
+  return (
+    hex.substring(0, 8) + "-" +
+    hex.substring(8, 12) + "-" +
+    hex.substring(12, 16) + "-" +
+    hex.substring(16, 20) + "-" +
+    hex.substring(20)
+  );
+}
+
+export function getBase64(bin: any): string | null {
+  if (!bin) return null;
+  if (bin.buffer) return Buffer.from(bin.buffer).toString("base64"); // MongoDB Binary
+  if (typeof bin === "string") return bin; // already base64 string
+  return null;
 }

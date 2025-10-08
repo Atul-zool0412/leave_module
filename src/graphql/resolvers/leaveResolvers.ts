@@ -4,8 +4,10 @@ import GraphQLJSON from "graphql-type-json";
 import connectDB, { getDb } from "../../config/db";
 import { TransactionType } from "../../enum/TransactionType";
 import { TodoStatus } from "../../enum/TodoStatus";
+import { PanddingAprovelStatus } from "../../enum/PanddingAprovelStatus"
 import { IQueryContext } from "interface/interface";
-import { binaryToUUID, guidToBinary } from "../../utills/idConversion";
+import { base64ToGuidString, guidToBinary, getBase64 } from "../../utills/idConversion";
+import { RejoiningStatus } from "../../enum/RejoiningStatus ";
 // import { Binary } from "mongodb";
 
 
@@ -63,13 +65,13 @@ export const resolvers = {
         { $sort: { assignedOnDate: -1 } },
         { $limit: 50 },
       ];
-      
+
       // Execute aggregation
       const result = await db
         .collection("TodoTaskApproval")
         .aggregate(aggregationPipeline)
         .toArray();
-        // console.log(aggregationPipeline); 
+      // console.log(aggregationPipeline); 
 
       // Map DB results to GraphQL response
       const items = result.map((todo: any) => ({
@@ -107,14 +109,18 @@ export const resolvers = {
         appService: todo.TaskDefinition?.TaskModule?.AppService || null,
         moduleData: todo.ModuleData,
         isEmployeeSpecificTodo: todo.IsEmployeeSpecificTodo,
-        employeeId: todo.Employee?.EmployeeId
-          ? binaryToUUID(todo.Employee.EmployeeId) // Convert to Binary here
-          : null,
+
+        // Safe conversion for employeeId and any other Binary GUID
+        employeeId: base64ToGuidString(getBase64(todo.Employee?.EmployeeId)),
         EmployeeName: todo.Employee?.Name || null,
+
         externalId: todo.Externald || null,
         formUrl: todo.FormUrl,
         status: todo.Status,
         priority: todo.Priority,
+
+        // Optional: if you have todo._id or other IDs
+        id: base64ToGuidString(getBase64(todo._id)),
       }));
 
       return {
@@ -337,11 +343,11 @@ export const resolvers = {
         .collection("EmployeeLeaveLedgerCollection")
         .aggregate(aggregationPipeline)
         .toArray();
-      console.log("leave types", leaveTypes);
+      // console.log("leave types", leaveTypes);
 
       const employeeLeaveTypes = leaveTypes.map((lt: any) => ({
         ...lt,
-        EmployeeLeaveTypeId: lt.EmployeeLeaveTypeId ? binaryToUUID(lt.EmployeeLeaveTypeId) : null,
+        EmployeeLeaveTypeId: base64ToGuidString(getBase64(lt.EmployeeLeaveTypeId)),
 
         transactionCounts: lt.transactionCounts.map((tx: any) => ({
           ...tx,
@@ -359,14 +365,14 @@ export const resolvers = {
       }));
 
       return {
-        EmployeeId: binaryToUUID(employeeLeaveType._id.toString("hex")),
+        EmployeeId: base64ToGuidString(getBase64(employeeLeaveType._id)),
         EmployeeName: {
           en: employeeLeaveType?.EmployeeName?.en?.FullName ?? "N/A",
           ar: employeeLeaveType?.EmployeeName?.ar?.FullName ?? "N/A",
         },
 
         EmployeeCode: employeeLeaveType.EmployeeCode,
-        LeaveBalanceAsOn: today.toISOString().split("T")[0],
+        LeaveBalanceAsOn: today.toISOString(),
         employeeLeaveTypes,
       };
     },
@@ -377,7 +383,7 @@ export const resolvers = {
         tenantId: string,
         companyId: string,
         employeeId: string
-        ApprovalStatus: number;
+        ApprovalStatus: PanddingAprovelStatus.InProgress,
         skipCount?: number;
         maxResultCount?: number;
       },
@@ -574,17 +580,17 @@ export const resolvers = {
         .toArray();
       // console.log("Application History Result:", result);
       const mappedItems = result.map((app: any) => ({
-        id: binaryToUUID(app._id), // convert Binary/UUID to string
+        id: base64ToGuidString(getBase64(app._id)),
         creationTime: app.AppliedOn?.toISOString() || null,
-        employeeLeaveMapId: binaryToUUID(app._id),
+        employeeLeaveMapId: base64ToGuidString(getBase64(app._id)),
         leaveTypeShortCode: app.LeaveTypeShortCode || "N/A",
-        employeeLeaveTypeId: binaryToUUID(app._id),
+        employeeLeaveTypeId: base64ToGuidString(getBase64(app._id)),
         leaveTypeName: {
           en: app.LeaveTypeName?.en?.Name || "N/A",
           ar: app.LeaveTypeName?.ar?.Name || "N/A",
         },
-        employeeId: app.EmployeeId ? binaryToUUID(app.EmployeeId) : null,
-        employeePlaceholderId: app.EmployeeId ? binaryToUUID(app.EmployeeId) : null,
+        employeeId: base64ToGuidString(getBase64(app.EmployeeId)),
+        employeePlaceholderId: base64ToGuidString(getBase64(app.EmployeeId)),
         thumbnailPicture: app.ThumbnailPicture || null,
         employeeCode: app.EmployeeCode || null,
         employeeName: {
@@ -657,22 +663,17 @@ export const resolvers = {
       const matchStage: any = {
         TenantId: tenantId,
         CompanyId: companyId,
+        EmployeeId: employeeId,
+        RejoiningStatus: {
+          $in: [
+            RejoiningStatus.OnTimeJoining,
+            RejoiningStatus.EarlyJoining,
+            RejoiningStatus.LateJoining
+          ]
+        },
       };
-      // Employee filter: ID or Code
-      if (args.employeeId) {
-        matchStage.EmployeeId = employeeId; // assign token EmployeeId
-      } else if (args.employeeCode) {
-        matchStage.EmployeeCode = args.employeeCode;
-      }
-
-
-
       if (args.leaveTypeId) {
         matchStage.LeaveTypeId = guidToBinary(args.leaveTypeId);
-      }
-
-      if (args.approvalStatus) {
-        matchStage.ApprovalStatus = args.approvalStatus;
       }
       // ------------------ Aggregation Pipeline ------------------
       const aggregationPipeline = [
@@ -699,6 +700,8 @@ export const resolvers = {
             RejoiningDate: 1,
             RejoinedOn: 1,
             ApprovalStatus: 1,
+            EarlyResumptionSettlement: 1,
+            LateResumptionSettlement: 1,
           },
         },
         { $sort: { CreationTime: -1 } },
@@ -712,52 +715,90 @@ export const resolvers = {
         .toArray();
 
       // ------------------ Mapping to DTO ------------------
-      const mappedItems = result.map((res: any) => ({
-        id: res._id?.toString("hex") || null,
-        creationTime: res.CreationTime?.toISOString() || null,
-        employeeLeaveMapId: res._id?.toString("hex") || null,
-        leaveTypeShortCode: res.LeaveTypeShortCode || "N/A",
-        employeeLeaveTypeId: res._id?.toString("hex") || null,
-        leaveTypeName: {
-          en: res.LeaveTypeName?.en?.Name || "N/A",
-          ar: res.LeaveTypeName?.ar?.Name || "N/A",
-        },
-        employeeId: res.EmployeeId?.toString("hex") || null,
-        employeePlaceholderId: res.EmployeePlaceholderId?.toString("hex") || null,
-        thumbnailPicture: res.ThumbnailPicture || null,
-        employeeCode: res.EmployeeCode || "N/A",
-        employeeName: {
-          en: res.EmployeeName?.en?.FullName || "N/A",
-          ar: res.EmployeeName?.ar?.FullName || "N/A",
-        },
-        leaveEntitlementType: res.LeaveEntitlementType || 0,
-        payType: res.PayType || 0,
-        unitOfLeave: res.UnitOfLeave || 0,
-        leavePeriod:
-          res.LeavePeriod?.StartDate && res.LeavePeriod?.EndDate
-            ? `${new Date(res.LeavePeriod.StartDate).toLocaleDateString("en-GB", {
-              day: "2-digit",
-              month: "short",
-            })} - ${new Date(res.LeavePeriod.EndDate).toLocaleDateString(
-              "en-GB",
-              { day: "2-digit", month: "short", year: "numeric" }
-            )}`
-            : null,
-        durationApproved: res.DurationApproved || 0,
-        rejoinConfRequired: res.RejoinConfRequired || false,
-        isRejoined: res.IsRejoined || false,
-        rejoiningStatus:
-          typeof res.RejoiningStatus === "number" ? res.RejoiningStatus : 0,
-        rejoiningDate: res.RejoiningDate?.toISOString()|| null,
-        rejoinedOn: res.RejoinedOn?.toISOString()|| null,
-        approvalStatus: res.ApprovalStatus ?? 0,
-      }));
+      const mappedItems = result.map((res: any) => {
+        // ------------------ Compute Leave Difference Date ------------------
+        let leaveDifferenceDate = 0;
 
+        if (res.RejoiningStatus === 1) {
+          // On-time rejoining → no difference
+          leaveDifferenceDate = 0;
+        } else if (res.RejoiningStatus === 2) {
+          // Early joining → pick from EarlyResumptionSettlement based on EarlySettlementOption
+          const settlement = res.EarlyResumptionSettlement;
+          if (settlement) {
+            // if (settlement.EarlySettlementOption === "AdvancePaySettlement") {            // need to change and review(mey be change AdvancePaySettlement to id or )
+            //   leaveDifferenceDate = settlement.AdvancePaySettlement?.NoOfDays || 0;
+            // } else {
+            //   leaveDifferenceDate = settlement.WithoutAdvancePaySettlement?.NoOfDays || 0;
+            // }
+            if (settlement.AdvancePaySettlement && settlement.EarlySettlementOption === settlement.AdvancePaySettlement.NoOfDays) {
+              leaveDifferenceDate = settlement.AdvancePaySettlement?.NoOfDays || 0;
+            } else if (settlement.WithoutAdvancePaySettlement && settlement.EarlySettlementOption === settlement.WithoutAdvancePaySettlement.NoOfDays) {
+              leaveDifferenceDate = settlement.WithoutAdvancePaySettlement?.NoOfDays || 0;
+            }
+          }
+        } else if (res.RejoiningStatus === 3) {
+          // Late joining → pick from LateResumptionSettlement
+          const settlement = res.LateResumptionSettlement;
+          leaveDifferenceDate = settlement?.NoOfDays || 0;
+        }
+
+        // ------------------ Return DTO ------------------
+        return {
+          id: res._id ? base64ToGuidString(getBase64(res._id)) : null,
+          creationTime: res.CreationTime?.toISOString() || null,
+          employeeLeaveMapId: res._id ? base64ToGuidString(getBase64(res._id)) : null,
+          leaveTypeShortCode: res.LeaveTypeShortCode || "N/A",
+          employeeLeaveTypeId: res._id ? base64ToGuidString(getBase64(res._id)) : null,
+          leaveTypeName: {
+            en: res.LeaveTypeName?.en?.Name || "N/A",
+            ar: res.LeaveTypeName?.ar?.Name || "N/A",
+          },
+          employeeId: res.EmployeeId ? base64ToGuidString(getBase64(res.EmployeeId)) : null,
+          employeePlaceholderId: res.EmployeePlaceholderId
+            ? base64ToGuidString(getBase64(res.EmployeePlaceholderId))
+            : null,
+          thumbnailPicture: res.ThumbnailPicture || null,
+          employeeCode: res.EmployeeCode || "N/A",
+          employeeName: {
+            en: res.EmployeeName?.en?.FullName || "N/A",
+            ar: res.EmployeeName?.ar?.FullName || "N/A",
+          },
+          leaveEntitlementType: res.LeaveEntitlementType || 0,
+          payType: res.PayType || 0,
+          unitOfLeave: res.UnitOfLeave || 0,
+          leavePeriod:
+            res.LeavePeriod?.StartDate && res.LeavePeriod?.EndDate
+              ? `${new Date(res.LeavePeriod.StartDate).toLocaleDateString("en-GB", {
+                day: "2-digit",
+                month: "short",
+              })} - ${new Date(res.LeavePeriod.EndDate).toLocaleDateString("en-GB", {
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+              })}`
+              : null,
+          durationApproved: res.DurationApproved || 0,
+          rejoinConfRequired: res.RejoinConfRequired || false,
+          isRejoined: res.IsRejoined || false,
+          // 🆕 Proper rejoining status (number or string)
+          rejoiningStatus:
+            typeof res.RejoiningStatus === "number"
+              ? res.RejoiningStatus
+              : res.RejoiningStatus || null,
+          rejoiningDate: res.RejoiningDate?.toISOString() || null,
+          rejoinedOn: res.RejoinedOn?.toISOString() || null,
+          // 🆕 Computed fields
+          actualResumptionDate: res.RejoinedOn?.toISOString() || null,
+          leaveDifferenceDate,
+          approvalStatus: res.ApprovalStatus ?? 0,
+        };
+      });
       // ------------------ Total Count ------------------
       const totalCount = await db
         .collection("LeaveResumptions")
         .countDocuments(matchStage);
-
+      // console.log(mappedItems);
       // ------------------ Return Wrapper ------------------
       return {
         items: mappedItems,
@@ -847,19 +888,17 @@ export const resolvers = {
 
 
       const mappedItems = result.map((encash: any) => ({
-        id: encash._id ? binaryToUUID(encash._id) : null,
+        id: base64ToGuidString(getBase64(encash._id)),
         CreationTime: encash.AppliedOn?.toISOString() || null,
-        employeeLeaveMapId: encash._id ? binaryToUUID(encash._id) : null,
+        employeeLeaveMapId: base64ToGuidString(getBase64(encash._id)),
         leaveTypeShortCode: encash.LeaveTypeShortCode || "N/A",
-        employeeLeaveTypeId: encash._id ? binaryToUUID(encash._id) : null,
+        employeeLeaveTypeId: base64ToGuidString(getBase64(encash._id)),
         leaveTypeName: {
           en: encash.LeaveTypeName?.en?.Name || "N/A",
           ar: encash.LeaveTypeName?.ar?.Name || "N/A",
         },
-        employeeId: encash.EmployeeId ? binaryToUUID(encash.EmployeeId) : null,
-        employeePlaceholderId: encash.EmployeePlaceholderId
-          ? binaryToUUID(encash.EmployeePlaceholderId)
-          : null,
+        employeeId: base64ToGuidString(getBase64(encash.EmployeeId)),
+        employeePlaceholderId: base64ToGuidString(getBase64(encash.EmployeePlaceholderId)),
         thumbnailPicture: encash.ThumbnailPicture || null,
         employeeCode: encash.EmployeeCode || "N/A",
         employeeName: {
