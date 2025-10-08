@@ -25,7 +25,7 @@ export const resolvers = {
         employeeId: string,
         todoStatus: number
       },
-      context: IQueryContext
+      // context: IQueryContext
     ) => {
 
       // Convert token UUIDs to MongoDB Binary
@@ -63,12 +63,13 @@ export const resolvers = {
         { $sort: { assignedOnDate: -1 } },
         { $limit: 50 },
       ];
-
+      
       // Execute aggregation
       const result = await db
         .collection("TodoTaskApproval")
         .aggregate(aggregationPipeline)
         .toArray();
+        // console.log(aggregationPipeline); 
 
       // Map DB results to GraphQL response
       const items = result.map((todo: any) => ({
@@ -156,7 +157,7 @@ export const resolvers = {
           EmployeeId: employeeId,
           IsDeleted: false,
         });
-      console.log("scacas", employeeLeaveType);
+      // console.log("scacas", employeeLeaveType);
       if (!employeeLeaveType) throw new Error("Employee not found");
 
       const activeLeaveTypes = employeeLeaveType.EmployeeLeaveTypes.filter(
@@ -176,7 +177,7 @@ export const resolvers = {
         {
           $match: {
             "LeaveLedgers.Date": { $lte: today },
-            "LeaveLedgers.TransactionType": { $nin: [3, 4, 9, 10] },
+            "LeaveLedgers.TransactionType": { $in: [1, 6] },
             $expr: {
               $and: [
                 { $eq: [{ $year: "$LeaveLedgers.Date" }, today.getFullYear()] },
@@ -336,7 +337,7 @@ export const resolvers = {
         .collection("EmployeeLeaveLedgerCollection")
         .aggregate(aggregationPipeline)
         .toArray();
-      // console.log("leave types", leaveTypes);
+      console.log("leave types", leaveTypes);
 
       const employeeLeaveTypes = leaveTypes.map((lt: any) => ({
         ...lt,
@@ -477,7 +478,7 @@ export const resolvers = {
         .collection("TaskApprovals")
         .aggregate(aggregationPipeline)
         .toArray();
-      console.log("result", result);
+      // console.log("result", result);
 
       return {
         items: result.map((doc: any) => ({
@@ -609,10 +610,10 @@ export const resolvers = {
         rejoiningStatus:
           typeof app.RejoiningStatus === "number" ? app.RejoiningStatus : 0,
         approvalStatus: app.ApprovalStatus || 0,
-        appliedOn: app.AppliedOn?.toISOString().split("T")[0] || null,
-        approvedOn: app.ApprovedOn?.toISOString().split("T")[0] || null,
-        rejoiningDate: app.RejoiningDate?.toISOString().split("T")[0] || null,
-        rejoinedOn: app.RejoinedOn?.toISOString().split("T")[0] || null,
+        appliedOn: app.AppliedOn?.toISOString() || null,
+        approvedOn: app.ApprovedOn?.toISOString() || null,
+        rejoiningDate: app.RejoiningDate?.toISOString() || null,
+        rejoinedOn: app.RejoinedOn?.toISOString() || null,
       }));
 
       // total count for pagination
@@ -747,8 +748,8 @@ export const resolvers = {
         isRejoined: res.IsRejoined || false,
         rejoiningStatus:
           typeof res.RejoiningStatus === "number" ? res.RejoiningStatus : 0,
-        rejoiningDate: res.RejoiningDate?.toISOString().split("T")[0] || null,
-        rejoinedOn: res.RejoinedOn?.toISOString().split("T")[0] || null,
+        rejoiningDate: res.RejoiningDate?.toISOString()|| null,
+        rejoinedOn: res.RejoinedOn?.toISOString()|| null,
         approvalStatus: res.ApprovalStatus ?? 0,
       }));
 

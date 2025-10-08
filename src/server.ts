@@ -31,7 +31,7 @@ async function startServer() {
   const server = new ApolloServer<IQueryContext>({
     schema,
     formatError: (error) => error,
-    context: async ({ req, res }: { req: Request; res: Response }): Promise<IQueryContext> => {
+    context: async ({ req, }: { req: Request; res: Response }): Promise<IQueryContext> => {
       const authHeader = req.headers.authorization;
       let tokenData: any = {};
       try {
